@@ -25,7 +25,6 @@ data:
         "otel": {
           "enabled": true,
           "endpoint": "http://otel-collector:4318",
-          "captureContent": true,
         }
       },
       "models": {

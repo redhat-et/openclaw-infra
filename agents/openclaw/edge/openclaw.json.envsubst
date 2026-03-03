@@ -17,7 +17,6 @@
     "otel": {
       "enabled": ${OTEL_ENABLED},
       "endpoint": "${OTEL_ENDPOINT}",
-      "captureContent": true,
       "traces": true,
       "metrics": true,
       "logs": false

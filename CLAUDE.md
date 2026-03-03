@@ -221,7 +221,6 @@ When A2A is disabled (default):
 All platforms emit OTLP traces to MLflow:
 - **OpenShift/K8s**: OTEL sidecar collector forwards to central MLflow
 - **Edge**: Local OTEL collector Quadlet forwards to MLflow route on OpenShift
-- `diagnostics.otel.captureContent: true` required in config for trace inputs/outputs to appear in MLflow
 
 ## Pre-Built Agents
 
@@ -279,5 +278,4 @@ All platforms emit OTLP traces to MLflow:
 | OAuthClient 500 "unauthorized_client" | `oc apply` corrupted secret state | Delete and recreate OAuthClient |
 | Agent shows wrong name | Init overwrote workspace or browser cache | Re-run `setup-agents.sh`; clear localStorage |
 | Kustomize overwrites agent ConfigMap | Base includes default shadowman-agent | `setup-agents.sh` applies ConfigMaps after kustomize |
-| Missing trace inputs/outputs in MLflow | `captureContent` not set | Add `diagnostics.otel.captureContent: true` to config |
 | Edge agent won't start (Secret error) | podman doesn't support Secret in `--configmap` | Use ConfigMap kind (setup-edge.sh handles this) |
