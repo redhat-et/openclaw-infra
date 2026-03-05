@@ -2,15 +2,39 @@
 
 ## Quick Start
 
-The fastest way to add an agent:
+The fastest way to add an agent — scaffolds files, deploys, and restarts in one command:
 
 ```bash
 ./scripts/add-agent.sh
 ```
 
-This scaffolds the files and prints the registration snippet. Or do it manually:
+The script prompts for an agent ID, display name, description, emoji, and color, then:
+1. Creates the agent directory from this template
+2. Runs envsubst and applies the agent ConfigMap
+3. Registers the agent in the live gateway config
+4. Syncs the config back to the ConfigMap (survives restarts)
+5. Installs workspace files (AGENTS.md, agent.json)
+6. Restarts the gateway
+
+Your agent is ready to chat immediately.
+
+### Flags
+
+| Flag | Purpose |
+|------|---------|
+| `--k8s` | Use kubectl instead of oc |
+| `--scaffold-only` | Create files only, don't deploy |
+| `--env-file PATH` | Custom .env file |
+
+### Non-interactive
+
+```bash
+./scripts/add-agent.sh myagent "My Agent" "Monitors API health"
+```
 
 ## Manual Setup
+
+If you prefer to do it step by step:
 
 ### 1. Copy the template
 
@@ -35,25 +59,21 @@ Open `myagent-agent.yaml.envsubst` and replace all `REPLACE_` placeholders:
 Write your agent's instructions in the `AGENTS.md` section. This is the markdown
 that tells the agent who it is and what to do.
 
-### 3. Register the agent
+### 3. Deploy
 
-Add this to `agents/openclaw/agents/agents-config-patch.yaml.envsubst` in the
-`agents.list` array:
-
-```json
-{
-  "id": "${OPENCLAW_PREFIX}_myagent",
-  "name": "My Agent",
-  "workspace": "~/.openclaw/workspace-${OPENCLAW_PREFIX}_myagent",
-  "subagents": {"allowAgents": ["*"]}
-}
-```
-
-### 4. Deploy
+Run `add-agent.sh` without `--scaffold-only` to deploy the already-scaffolded agent,
+or deploy manually:
 
 ```bash
-./scripts/setup-agents.sh           # OpenShift
-./scripts/setup-agents.sh --k8s     # Kubernetes
+# Run envsubst on the template
+envsubst < myagent-agent.yaml.envsubst > myagent-agent.yaml
+
+# Apply to cluster
+oc apply -f myagent-agent.yaml
+
+# The agent also needs to be added to the live gateway config.
+# The easiest way is to add it via the UI, then sync:
+./scripts/sync-config.sh
 ```
 
 ## Adding a Scheduled Job

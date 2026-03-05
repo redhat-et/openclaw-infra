@@ -50,9 +50,10 @@ A reproducible demo of **AI agents running across hybrid platforms** — OpenShi
 ```bash
 ./scripts/setup.sh                    # OpenShift (interactive)
 ./scripts/setup.sh --k8s              # Vanilla Kubernetes
+./scripts/setup.sh --preserve-config  # Re-deploy without overwriting live config
 ```
 
-`setup.sh` prompts for namespace prefix, agent name, API keys, and optional Vertex AI / A2A config. It generates secrets into `.env` (git-ignored), builds a `generated/` directory with processed templates, and deploys via kustomize.
+`setup.sh` prompts for namespace prefix, agent name, API keys, and optional Vertex AI / A2A config. It generates secrets into `.env` (git-ignored), builds a `generated/` directory with processed templates, and deploys via kustomize. On re-runs, it detects config drift (agents added via `add-agent.sh`, UI changes synced via `sync-config.sh`) and prompts to preserve the live config. Use `--preserve-config` to skip the prompt.
 
 ### Edge (RHEL / Fedora)
 
@@ -83,6 +84,8 @@ kubectl port-forward svc/openclaw 18789:18789 -n <prefix>-openclaw
 | Script | Purpose |
 |--------|---------|
 | `./scripts/export-config.sh` | Export live `openclaw.json` from running pod |
+| `./scripts/sync-config.sh` | Sync live config from pod back to ConfigMap (preserves UI changes across restarts) |
+| `./scripts/add-agent.sh` | Scaffold and deploy a new agent end-to-end |
 | `./scripts/update-jobs.sh` | Update cron jobs without full re-deploy |
 | `./scripts/deploy-otelcollector.sh` | Deploy OTEL sidecar collector for MLflow trace export |
 | `./scripts/teardown.sh` | Remove namespace, resources, PVCs |
@@ -172,8 +175,9 @@ To add a new agent, copy `agents/_template/` and customize.
 ```
 
 - The init container copies `openclaw.json`, `AGENTS.md`, and `agent.json` from ConfigMap mounts into the PVC on every start
-- UI changes write to PVC only — they are lost on next restart
-- Use `./scripts/export-config.sh` to capture live config before it gets overwritten
+- UI changes write to PVC only — they are lost on next restart unless synced
+- Use `./scripts/sync-config.sh` to persist live config back to the ConfigMap (survives restarts)
+- Use `./scripts/export-config.sh` to save a local copy for reference or diffing
 
 ### Per-User Namespaces (K8s)
 
@@ -277,7 +281,7 @@ All platforms emit OTLP traces to MLflow:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | EACCES on `/home/node/.openclaw/canvas` | PVC owned by wrong UID | Delete PVC, redeploy (K8s patch sets fsGroup: 1000) |
-| Config changes lost after restart | Init container overwrites from ConfigMap | Export with `export-config.sh` first |
+| Config changes lost after restart | Init container overwrites from ConfigMap | Run `sync-config.sh` to persist, or `export-config.sh` to save locally |
 | OAuthClient 500 "unauthorized_client" | `oc apply` corrupted secret state | Delete and recreate OAuthClient |
 | Agent shows wrong name | Init overwrote workspace or browser cache | Re-run `setup-agents.sh`; clear localStorage |
 | Kustomize overwrites agent ConfigMap | Base includes default shadowman-agent | `setup-agents.sh` applies ConfigMaps after kustomize |

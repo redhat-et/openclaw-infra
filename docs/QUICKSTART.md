@@ -128,15 +128,9 @@ A running OpenClaw gateway with:
 Open the WebChat UI from the Control UI sidebar, select your agent, and start chatting. The agent has access to the
 tools configured in your gateway — by default, a general-purpose assistant backed by your chosen model.
 
-### Add more agents
+### Create your own agent
 
-Deploy additional pre-built agents (resource optimizer, MLOps monitor) with scheduled jobs:
-
-```bash
-./scripts/setup-agents.sh
-```
-
-Or scaffold your own:
+Scaffold and deploy a new agent end-to-end:
 
 ```bash
 ./scripts/add-agent.sh
@@ -167,8 +161,9 @@ unless you pass `--delete-env`.
 
 | What | How |
 |------|-----|
-| Deploy more agents | `./scripts/setup-agents.sh` |
-| Create a custom agent | `./scripts/add-agent.sh` |
+| Create a custom agent | `./scripts/add-agent.sh` (scaffolds, deploys, and restarts — end to end) |
+| Preserve UI changes | `./scripts/sync-config.sh` (syncs live config back to ConfigMap) |
+| Re-deploy safely | `./scripts/setup.sh` detects config drift and prompts to preserve |
 | Add scheduled jobs | Create a `JOB.md` in your agent directory, run `./scripts/update-jobs.sh` |
 | Enable observability | `./scripts/deploy-otelcollector.sh` (requires OTEL Operator + MLflow) |
 | Enable zero-trust A2A | Redeploy with `./scripts/setup.sh --with-a2a` (requires [Kagenti](https://github.com/kagenti/kagenti)) |
