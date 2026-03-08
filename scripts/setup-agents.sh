@@ -170,7 +170,7 @@ else
 fi
 
 # Agent model priority: Anthropic API > Vertex (anthropic or google) > in-cluster
-# VERTEX_PROVIDER controls which Vertex provider: "anthropic" or "google" (default)
+# VERTEX_PROVIDER controls which Vertex provider: "google" (default) or "anthropic"
 export VERTEX_PROVIDER="${VERTEX_PROVIDER:-google}"
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   export DEFAULT_AGENT_MODEL="anthropic/claude-sonnet-4-6"
