@@ -206,8 +206,9 @@ spec:
               key: bot-token
               optional: true
         # Google Vertex AI (for Gemini or Anthropic models via GCP)
+        # Must match the secret key from setup.sh: --from-file=vertex-credentials.json=...
         - name: GOOGLE_APPLICATION_CREDENTIALS
-          value: /vertex/ambient-code-key.json
+          value: /vertex/vertex-credentials.json
         - name: GCE_METADATA_HOST
           value: disabled
         - name: GOOGLE_CLOUD_PROJECT
@@ -263,12 +264,101 @@ spec:
         - name: vertex-credentials
           mountPath: /vertex
           readOnly: true
+        - name: vertex-token-dir
+          mountPath: /vertex-token
         - name: resource-report
           mountPath: /data/reports/resource-optimizer
           readOnly: true
         - name: mlops-report
           mountPath: /data/reports/mlops-monitor
           readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      # Vertex AI token refresh: writes OAuth2 access token to a file for google-vertex provider.
+      # Vertex requires Bearer tokens; the gateway reads this file via secrets file provider.
+      # Write a placeholder file immediately so the gateway can start; then refresh with real token.
+      - name: vertex-token-refresh
+        image: google/cloud-sdk:alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          TOKEN_FILE="/vertex-token/access-token.json"
+          CRED="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+          mkdir -p /vertex-token/.config
+          export CLOUDSDK_CONFIG=/vertex-token/.config
+          echo "{\"token\": \"\", \"projectId\": \"${GOOGLE_CLOUD_PROJECT:-}\"}" > "$TOKEN_FILE"
+          chmod 600 "$TOKEN_FILE"
+          echo "Bearer placeholder" > /vertex-token/bearer-token
+          chmod 600 /vertex-token/bearer-token
+          if [ -z "$CRED" ] || [ ! -f "$CRED" ]; then
+            echo "Vertex credentials not mounted; keeping placeholder token file."
+            sleep 86400
+            exit 0
+          fi
+          # Detect credential type: service account key vs user ADC
+          CRED_TYPE=$(grep -o '"type"[[:space:]]*:[[:space:]]*"[^"]*"' "$CRED" | head -1 | sed 's/.*"type"[[:space:]]*:[[:space:]]*"//;s/"//')
+          echo "Detected credential type: ${CRED_TYPE:-unknown}"
+          while true; do
+            TOKEN=""
+            if [ "$CRED_TYPE" = "service_account" ]; then
+              # Service account key: activate then print token
+              if gcloud auth activate-service-account --key-file="$CRED" 2>/dev/null; then
+                TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null) || true
+              fi
+            elif [ "$CRED_TYPE" = "authorized_user" ]; then
+              # User ADC: set GOOGLE_APPLICATION_CREDENTIALS and print token directly
+              TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null) || true
+            else
+              echo "Unsupported credential type: ${CRED_TYPE:-empty}. Need service_account or authorized_user."
+              sleep 86400
+              exit 0
+            fi
+            if [ -n "$TOKEN" ] && [ -n "$GOOGLE_CLOUD_PROJECT" ]; then
+              echo "{\"token\": \"$TOKEN\", \"projectId\": \"$GOOGLE_CLOUD_PROJECT\"}" > "$TOKEN_FILE"
+              chmod 600 "$TOKEN_FILE"
+              # Patch the live gateway config with the Bearer token as a plain string header.
+              # OpenClaw's sanitizeModelHeaders drops non-string header values, so file secret
+              # refs in headers don't work. We write the resolved string directly instead.
+              CONFIG="/home/node/.openclaw/openclaw.json"
+              if [ -f "$CONFIG" ]; then
+                sed -i "s|\"Authorization\": \"Bearer [^\"]*\"|\"Authorization\": \"Bearer $TOKEN\"|" "$CONFIG"
+                echo "Config patched with Bearer token"
+              fi
+              echo "Token refreshed at $(date -u +%H:%M:%SZ)"
+            else
+              echo "Token refresh failed at $(date -u +%H:%M:%SZ)"
+            fi
+            sleep 3000
+          done
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /vertex/vertex-credentials.json
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: GOOGLE_CLOUD_PROJECT
+              optional: true
+        volumeMounts:
+        - name: vertex-credentials
+          mountPath: /vertex
+          readOnly: true
+        - name: vertex-token-dir
+          mountPath: /vertex-token
+        - name: openclaw-home
+          mountPath: /home/node/.openclaw
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 64Mi
+            cpu: 100m
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -336,6 +426,9 @@ spec:
         secret:
           secretName: ambient-vertex
           optional: true
+      # Written by vertex-token-refresh sidecar; read by gateway for google-vertex auth
+      - name: vertex-token-dir
+        emptyDir: {}
       # Shadowman agent (included in core deployment)
       - name: shadowman-agent
         configMap:

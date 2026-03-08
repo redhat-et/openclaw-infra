@@ -93,17 +93,16 @@ kubectl port-forward svc/openclaw 18789:18789 -n "$OPENCLAW_NAMESPACE"
 
 ## Model Options
 
-Agents need an LLM. The setup script supports three model backends:
+Agents need an LLM. The setup script asks you to choose one source (Anthropic API key, Vertex AI, or local model), then prompts only for that choice.
 
 | Option | Provider | `DEFAULT_AGENT_MODEL` |
 |--------|----------|----------------------|
 | Anthropic API key | `anthropic` | `anthropic/claude-sonnet-4-6` |
-| Google Vertex AI | `google-vertex` | `google-vertex/gemini-2.5-pro` |
+| Anthropic via Vertex | `anthropic-vertex` | `anthropic-vertex/claude-sonnet-4-6` |
+| Google Vertex AI (Gemini) | `google-vertex` | `google-vertex/gemini-2.5-pro` |
 | In-cluster vLLM | `local` | `local/openai/gpt-oss-20b` |
 
-Priority: Anthropic > Vertex > in-cluster. The `MODEL_ENDPOINT` variable configures the in-cluster provider URL (defaults to `http://vllm.openclaw-llms.svc.cluster.local/v1`).
-
-**Google Vertex AI** requires a GCP service account JSON key with Vertex AI permissions. The setup script creates a `vertex-credentials` K8s secret and sets `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` on the pod.
+**Vertex AI** (option 2 at setup): default provider is **anthropic** (Claude); you can choose **google** (Gemini). Requires a GCP project and service account JSON key with Vertex AI permissions. The setup script creates a `vertex-credentials` K8s secret and sets `GOOGLE_APPLICATION_CREDENTIALS` (to `/vertex/vertex-credentials.json`), `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` on the pod. **Note:** Claude via Vertex (anthropic-vertex) currently hits a 404 in the gateway because the adapter uses `/v1/messages` while Vertex uses a different path; use the Anthropic API key (option 1) for Claude, or Vertex with provider **google** for Gemini.
 
 To deploy the vLLM model server, see [`agents/openclaw/llm/`](./llm/).
 

@@ -29,7 +29,7 @@ Deploy [OpenClaw](https://github.com/openclaw) on Kubernetes, OpenShift, and sta
 The script prompts for:
 - **Namespace prefix** (e.g., `sally`) — creates `sally-openclaw` namespace
 - **Agent name** (e.g., `Lynx`) — your agent's display name
-- **API keys** (optional — without them, agents use the in-cluster model)
+- **LLM source** — choose one: (1) Anthropic API key, (2) Google Vertex AI (Claude or Gemini), or (3) local/in-cluster model; then you are prompted only for that choice
 
 ```
  ┌──────────────────────────────┐
@@ -49,7 +49,7 @@ The script prompts for:
 OpenClaw Gateway:  https://openclaw-<prefix>-openclaw.apps.YOUR-CLUSTER.com
 ```
 
-The UI uses OpenShift OAuth login. The Control UI will prompt for the **Gateway Token**:
+The UI uses OpenShift OAuth login. In the Control UI, go to **Overview** and paste your **Gateway Token** into the Gateway token field:
 ```bash
 grep OPENCLAW_GATEWAY_TOKEN .env
 ```
