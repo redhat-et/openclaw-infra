@@ -158,7 +158,7 @@ log_info "Running envsubst on agent templates..."
 export MODEL_ENDPOINT="${MODEL_ENDPOINT:-http://vllm.openclaw-llms.svc.cluster.local/v1}"
 export VERTEX_ENABLED="${VERTEX_ENABLED:-false}"
 export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-}"
-export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-}"
+export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 
 # MLflow defaults (for existing .env files that don't have these yet)
 export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-http://mlflow-service.mlflow.svc.cluster.local:5000}"
