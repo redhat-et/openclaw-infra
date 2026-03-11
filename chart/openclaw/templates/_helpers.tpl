@@ -96,12 +96,14 @@ OAuth client secret — use provided or generate.
 
 {{/*
 OAuth cookie secret — use provided or generate.
+The oauth-proxy reads the mounted file as raw bytes and uses them directly
+as the AES key, so the value must be exactly 16, 24, or 32 bytes.
 */}}
 {{- define "openclaw.oauthCookieSecret" -}}
 {{- if .Values.secrets.oauthCookieSecret -}}
 {{ .Values.secrets.oauthCookieSecret }}
 {{- else -}}
-{{ randAlphaNum 32 | printf "%x" }}
+{{ randAlphaNum 32 }}
 {{- end }}
 {{- end }}
 
