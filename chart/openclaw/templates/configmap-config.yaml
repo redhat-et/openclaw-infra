@@ -41,17 +41,19 @@ data:
         "providers": {
           "local": {
             "baseUrl": {{ .Values.model.endpoint | quote }},
-            "api": "openai-completions",
+            "api": {{ .Values.model.api | quote }},
             "apiKey": "fakekey",
+            "auth": "token",
             "models": [
               {
-                "id": "openai/gpt-oss-20b",
-                "name": "GPT OSS 20B",
+                "id": {{ .Values.model.id | quote }},
+                "name": {{ .Values.model.name | quote }},
+                "api": {{ .Values.model.api | quote }},
                 "reasoning": false,
                 "input": ["text"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-                "contextWindow": 32768,
-                "maxTokens": 8192
+                "contextWindow": {{ .Values.model.contextWindow }},
+                "maxTokens": {{ .Values.model.maxTokens }}
               }
             ]
           },
@@ -104,7 +106,7 @@ data:
           {
             "id": {{ include "openclaw.agentId" . | quote }},
             "name": {{ .Values.agent.displayName | quote }},
-            "workspace": "~/.openclaw/workspace-{{ include "openclaw.agentId" . }}",
+            "workspace": "/home/node/.openclaw/workspace-{{ include "openclaw.agentId" . }}",
             "model": {"primary": {{ include "openclaw.defaultAgentModel" . | quote }}},
             "subagents": {"allowAgents": ["*"]}
           }

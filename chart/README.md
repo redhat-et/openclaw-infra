@@ -25,12 +25,18 @@
 
 **OpenShift:**
 
+Using a MaaS hosted model.
+
 ```bash
 helm install openclaw chart/openclaw/ \
   --namespace claw --create-namespace \
   --set prefix=red \
   --set clusterDomain=apps.example.com \
-  --set model.endpoint="http://maas.apps.example.com/maas/qwen35-9b/v1"
+  --set model.endpoint="http://maas.apps.example.com/maas/qwen35-9b/v1" \
+  --set model.id="qwen35-9b" \
+  --set model.name="Qwen35-9b" \
+  --set model.contextWindow=60000 \
+  --set model.maxTokens=60000
 ```
 
 **Kubernetes:**

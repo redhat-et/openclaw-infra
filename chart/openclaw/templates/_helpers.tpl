@@ -68,7 +68,7 @@ anthropic/claude-sonnet-4-6
 {{- else if .Values.vertex.enabled -}}
 anthropic-vertex/claude-sonnet-4-6
 {{- else -}}
-local/openai/gpt-oss-20b
+local/{{ .Values.model.id }}
 {{- end }}
 {{- end }}
 
