@@ -16,6 +16,9 @@ image:
   tag: latest
   pullPolicy: Always
 
+# -- OAuth proxy image (OpenShift only, must match cluster version)
+oauthProxyImage: "quay.io/openshift/origin-oauth-proxy:4.18"
+
 # -- Init container image (ubi9-minimal on OpenShift, busybox on K8s)
 # Leave empty to auto-select based on mode
 initImage: ""

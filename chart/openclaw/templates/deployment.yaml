@@ -79,7 +79,7 @@ spec:
       containers:
         {{- if eq .Values.mode "openshift" }}
         - name: oauth-proxy
-          image: quay.io/openshift/origin-oauth-proxy:4.14
+          image: {{ .Values.oauthProxyImage }}
           args:
             - --http-address=:8443
             - --https-address=
