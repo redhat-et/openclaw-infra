@@ -245,7 +245,7 @@ spec:
               drop:
                 - ALL
         - name: agent-card
-          image: registry.redhat.io/ubi9:latest
+          image: registry.access.redhat.com/ubi9:latest
           command: ["python3", "-u", "/scripts/a2a-bridge.py"]
           ports:
             - name: a2a
