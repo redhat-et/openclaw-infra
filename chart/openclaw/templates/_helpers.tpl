@@ -86,7 +86,7 @@ On upgrade, existing secrets are looked up first to avoid regeneration.
 {{- if and $existing $existing.data (index $existing.data "OPENCLAW_GATEWAY_TOKEN") -}}
 {{ index $existing.data "OPENCLAW_GATEWAY_TOKEN" | b64dec }}
 {{- else -}}
-{{ randAlphaNum 32 | b64enc }}
+{{ randAlphaNum 32 }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -124,6 +124,22 @@ as the AES key, so the value must be exactly 16, 24, or 32 bytes.
 {{ randAlphaNum 32 }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+Agent card JSON payload (shared between agent.json and agent-card.json).
+*/}}
+{{- define "openclaw.agentCardJson" -}}
+{
+  "name": "openclaw",
+  "description": "OpenClaw AI Agent Gateway",
+  "version": "1.0.0",
+  "url": "http://openclaw:18789",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  }
+}
 {{- end }}
 
 {{/*

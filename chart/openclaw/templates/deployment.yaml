@@ -4,8 +4,10 @@ metadata:
   name: openclaw
   labels:
     {{- include "openclaw.labels" . | nindent 4 }}
+    {{- if .Values.a2a.enabled }}
     kagenti.io/type: agent
     kagenti.io/protocol: a2a
+    {{- end }}
     kagenti.io/framework: "OpenClaw"
 spec:
   replicas: 1
@@ -18,9 +20,11 @@ spec:
     metadata:
       labels:
         {{- include "openclaw.selectorLabels" . | nindent 8 }}
+        {{- if .Values.a2a.enabled }}
         kagenti.io/type: agent
         kagenti.io/protocol: a2a
-        kagenti.io/inject: {{ if .Values.a2a.enabled }}enabled{{ else }}disabled{{ end }}
+        kagenti.io/inject: enabled
+        {{- end }}
       annotations:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '18789'
@@ -72,6 +76,8 @@ spec:
           volumeMounts:
             - name: openclaw-home
               mountPath: /home/node/.openclaw
+            - name: openclaw-workspace
+              mountPath: /home/node/.openclaw/workspace
             - name: config-template
               mountPath: /config
             - name: shadowman-agent
@@ -227,6 +233,8 @@ spec:
           volumeMounts:
             - name: openclaw-home
               mountPath: /home/node/.openclaw
+            - name: openclaw-workspace
+              mountPath: /home/node/.openclaw/workspace
             - name: tmp-volume
               mountPath: /tmp
             - name: vertex-credentials
@@ -244,6 +252,7 @@ spec:
             capabilities:
               drop:
                 - ALL
+        {{- if .Values.a2a.enabled }}
         - name: agent-card
           image: registry.access.redhat.com/ubi9:latest
           command: ["python3", "-u", "/scripts/a2a-bridge.py"]
@@ -273,6 +282,7 @@ spec:
             capabilities:
               drop:
                 - ALL
+        {{- end }}
       volumes:
         - name: tmp-volume
           emptyDir: {}
@@ -287,6 +297,9 @@ spec:
         - name: openclaw-home
           persistentVolumeClaim:
             claimName: openclaw-home-pvc
+        - name: openclaw-workspace
+          persistentVolumeClaim:
+            claimName: openclaw-workspace-pvc
         - name: config-template
           configMap:
             name: openclaw-config
@@ -306,9 +319,11 @@ spec:
           configMap:
             name: mlops-report-latest
             optional: true
+        {{- if .Values.a2a.enabled }}
         - name: agent-card-data
           configMap:
             name: openclaw-agent-card
         - name: a2a-bridge-script
           configMap:
             name: a2a-bridge
+        {{- end }}

@@ -18,11 +18,11 @@ data:
         "mode": "local",
         "bind": "loopback",
         "port": 18789,
-        "trustedProxies": ["10.128.0.0/14"],
+        "trustedProxies": {{ .Values.gateway.trustedProxies | toJson }},
         "auth": {"mode": "token", "allowTailscale": false},
         "controlUi": {
           "enabled": true,
-          "dangerouslyDisableDeviceAuth": true,
+          "dangerouslyDisableDeviceAuth": {{ .Values.gateway.dangerouslyDisableDeviceAuth }},
           "allowedOrigins": {{ include "openclaw.allowedOrigins" . }}
         },
         "http": {"endpoints": {"chatCompletions": {"enabled": true}}}
@@ -30,8 +30,13 @@ data:
       "diagnostics": {
         "enabled": true,
         "otel": {
+          {{- if .Values.observability.otelEndpoint }}
           "enabled": true,
           "endpoint": {{ .Values.observability.otelEndpoint | quote }},
+          {{- else }}
+          "enabled": false,
+          "endpoint": "http://localhost:4318",
+          {{- end }}
           "traces": true,
           "metrics": true,
           "logs": false

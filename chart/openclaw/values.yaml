@@ -76,10 +76,18 @@ telegram:
   # -- Allowed Telegram user IDs (comma-separated)
   allowFrom: ""
 
+# -- Gateway settings
+gateway:
+  # -- Trusted proxy CIDRs (OpenShift default: 10.128.0.0/14, adjust for your cluster)
+  trustedProxies:
+    - "10.128.0.0/14"
+  # -- Disable device auth for control UI (required behind reverse proxy)
+  dangerouslyDisableDeviceAuth: true
+
 # -- Observability
 observability:
-  # -- OTEL exporter endpoint
-  otelEndpoint: "http://localhost:4318"
+  # -- OTEL exporter endpoint (empty = disable OTEL export)
+  otelEndpoint: ""
   # -- MLflow tracking URI
   mlflowUri: ""
 
@@ -116,7 +124,7 @@ quota:
 # -- Pod disruption budget
 pdb:
   enabled: true
-  maxUnavailable: 0
+  maxUnavailable: 1
 
 # -- Gateway container resources
 resources:

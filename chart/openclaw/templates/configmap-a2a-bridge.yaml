@@ -1,3 +1,4 @@
+{{- if .Values.a2a.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -273,3 +274,4 @@ data:
         except KeyboardInterrupt:
             pass
         server.server_close()
+{{- end }}
