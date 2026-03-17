@@ -134,7 +134,7 @@ Agent card JSON payload (shared between agent.json and agent-card.json).
   "name": "openclaw",
   "description": "OpenClaw AI Agent Gateway",
   "version": "1.0.0",
-  "url": "http://openclaw:18789",
+  "url": {{ .Values.a2a.agentUrl | default (printf "http://%s:18789" (include "openclaw.fullname" .)) | quote }},
   "capabilities": {
     "streaming": true,
     "pushNotifications": false

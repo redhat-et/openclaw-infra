@@ -128,7 +128,7 @@ data:
       "channels": {
         "telegram": {
           "dmPolicy": "allowlist",
-          "allowFrom": [{{ .Values.telegram.allowFrom }}]
+          "allowFrom": {{ toJson .Values.telegram.allowFrom }}
         }
       },
       {{- end }}

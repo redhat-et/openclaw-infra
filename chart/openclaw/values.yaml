@@ -73,8 +73,8 @@ telegram:
   enabled: false
   # -- Bot token from @BotFather
   botToken: ""
-  # -- Allowed Telegram user IDs (comma-separated)
-  allowFrom: ""
+  # -- Allowed Telegram user IDs
+  allowFrom: []
 
 # -- Gateway settings
 gateway:
@@ -94,6 +94,8 @@ observability:
 # -- A2A zero-trust communication (requires Kagenti platform)
 a2a:
   enabled: false
+  # -- Agent card URL for external discovery (defaults to in-cluster service URL)
+  agentUrl: ""
 
 # -- Storage
 storage:
