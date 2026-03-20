@@ -48,7 +48,7 @@ K8S_MODE=false
 A2A_ENABLED=false
 PRESERVE_CONFIG=false
 ENV_FILE=""
-KC_REALM="${KEYCLOAK_REALM:-demo}"
+KC_REALM="${KEYCLOAK_REALM:-kagenti}"
 KC_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
