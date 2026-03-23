@@ -6,9 +6,10 @@
 # UI, MCP Gateway) on an OpenShift cluster. Run this BEFORE setup.sh --with-a2a.
 #
 # Usage:
-#   ./scripts/setup-kagenti.sh                              # Interactive
-#   ./scripts/setup-kagenti.sh --kagenti-repo /path/to/kagenti
-#   ./scripts/setup-kagenti.sh --realm nerc                 # Custom Keycloak realm
+#   ./scripts/setup-kagenti.sh                              # Auto-clones kagenti main to ~/.cache/kagenti
+#   ./scripts/setup-kagenti.sh --kagenti-repo /path/to/kagenti  # Use local clone
+#   ./scripts/setup-kagenti.sh --kagenti-repo https://github.com/org/kagenti.git  # Clone from URL
+#   ./scripts/setup-kagenti.sh --realm nerc                 # Custom Keycloak realm (default: kagenti)
 #   ./scripts/setup-kagenti.sh --skip-ovn-patch             # Skip OVN gateway patch
 #   ./scripts/setup-kagenti.sh --skip-mcp-gateway           # Skip MCP Gateway install
 #
@@ -28,7 +29,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Defaults
 KAGENTI_REPO="${KAGENTI_REPO:-}"
-KC_REALM="${KEYCLOAK_REALM:-}"
+KAGENTI_CACHE_DIR="${HOME}/.cache/kagenti"
+KAGENTI_GITHUB_URL="https://github.com/kagenti/kagenti.git"
+KC_REALM="${KEYCLOAK_REALM:-kagenti}"
 KC_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
 SKIP_OVN_PATCH=false
 SKIP_MCP_GATEWAY=false
@@ -61,8 +64,8 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --kagenti-repo PATH       Path to local kagenti repo clone"
-      echo "  --realm REALM             Keycloak realm (required, or \$KEYCLOAK_REALM)"
+      echo "  --kagenti-repo PATH|URL   Local path or GitHub URL to kagenti repo (default: clone main to ~/.cache/kagenti)"
+      echo "  --realm REALM             Keycloak realm (default: kagenti, or \$KEYCLOAK_REALM)"
       echo "  --keycloak-namespace NS   Keycloak namespace (default: keycloak, or \$KEYCLOAK_NAMESPACE)"
       echo "  --skip-ovn-patch          Skip OVN gateway routing patch"
       echo "  --skip-mcp-gateway        Skip MCP Gateway installation"
@@ -74,12 +77,6 @@ while [[ $# -gt 0 ]]; do
     *) log_error "Unknown option: $1"; exit 1 ;;
   esac
 done
-
-if [ -z "$KC_REALM" ]; then
-  log_error "--realm is required (e.g., --realm nerc)"
-  echo "  Set \$KEYCLOAK_REALM or pass --realm <name>"
-  exit 1
-fi
 
 run_cmd() {
   if $DRY_RUN; then
@@ -142,27 +139,44 @@ if ! command -v helm &>/dev/null; then
 fi
 log_success "helm found: $(helm version --short)"
 
-# Prompt for kagenti repo if not provided
+# Resolve kagenti repo: local path, GitHub URL, or auto-clone from main
+_clone_kagenti() {
+  local url="$1" dest="$2"
+  log_info "Cloning kagenti from ${url} → ${dest}..."
+  if $DRY_RUN; then
+    echo "  [dry-run] rm -rf \"$dest\""
+    echo "  [dry-run] git clone --depth=1 \"$url\" \"$dest\""
+    return 0
+  fi
+  rm -rf "$dest"
+  if ! git clone --depth=1 "$url" "$dest" 2>&1; then
+    log_error "Failed to clone kagenti from $url"
+    exit 1
+  fi
+  log_success "Cloned kagenti (main)"
+}
+
+KAGENTI_SOURCE=""
 if [ -z "$KAGENTI_REPO" ]; then
-  DEFAULT_KAGENTI_REPO="$(cd "$REPO_ROOT/.." && pwd)/kagenti"
-  if [ -d "$DEFAULT_KAGENTI_REPO/charts" ]; then
-    log_info "Found kagenti repo at: $DEFAULT_KAGENTI_REPO"
-    read -p "  Use this path? (Y/n): " -n 1 -r REPLY
-    echo
-    if [[ ! "$REPLY" =~ ^[Nn]$ ]]; then
-      KAGENTI_REPO="$DEFAULT_KAGENTI_REPO"
-    fi
-  fi
-  if [ -z "$KAGENTI_REPO" ]; then
-    read -p "  Path to kagenti repo: " KAGENTI_REPO
-  fi
+  # No --kagenti-repo given: always clone fresh from upstream main
+  KAGENTI_SOURCE="$KAGENTI_GITHUB_URL"
+  _clone_kagenti "$KAGENTI_GITHUB_URL" "$KAGENTI_CACHE_DIR"
+  KAGENTI_REPO="$KAGENTI_CACHE_DIR"
+elif [[ "$KAGENTI_REPO" == http://* ]] || [[ "$KAGENTI_REPO" == https://* ]] || [[ "$KAGENTI_REPO" == git@* ]]; then
+  # GitHub/git URL: clone into cache
+  KAGENTI_SOURCE="$KAGENTI_REPO"
+  _clone_kagenti "$KAGENTI_REPO" "$KAGENTI_CACHE_DIR"
+  KAGENTI_REPO="$KAGENTI_CACHE_DIR"
+else
+  # Local path provided — use as-is
+  KAGENTI_SOURCE="$KAGENTI_REPO (local)"
 fi
 
 if [ ! -d "$KAGENTI_REPO/charts/kagenti-deps" ] || [ ! -d "$KAGENTI_REPO/charts/kagenti" ]; then
   log_error "Invalid kagenti repo: $KAGENTI_REPO (missing charts/kagenti-deps or charts/kagenti)"
   exit 1
 fi
-log_success "Kagenti repo: $KAGENTI_REPO"
+log_success "Kagenti repo: $KAGENTI_SOURCE"
 echo ""
 
 # ============================================================================
