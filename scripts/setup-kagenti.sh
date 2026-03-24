@@ -3,7 +3,8 @@
 # KAGENTI PLATFORM SETUP
 # ============================================================================
 # Installs the Kagenti stack (SPIRE, cert-manager, Keycloak, operator, webhook,
-# UI, MCP Gateway) on an OpenShift cluster. Run this BEFORE setup.sh --with-a2a.
+# MCP Gateway) on an OpenShift cluster. Run this BEFORE setup.sh --with-a2a.
+# Prometheus/Kiali are disabled. UI/backend installed by default (use --skip-ui to disable).
 #
 # Usage:
 #   ./scripts/setup-kagenti.sh                              # Auto-clones kagenti main to ~/.cache/kagenti
@@ -15,9 +16,7 @@
 #
 # Prerequisites:
 #   - oc / kubectl with cluster-admin
-#   - helm >= 3.18.0 (Helm 4 also works)
-#   - Local clone of kagenti repo (use sallyom/kagenti branch charts-updated-webhook
-#     until port exclusion annotations are merged upstream)
+#   - helm >= 3.18.0 < 4
 #
 # Tested on: OCP 4.19+ (ROSA)
 # ============================================================================
@@ -35,7 +34,8 @@ KC_REALM="${KEYCLOAK_REALM:-kagenti}"
 KC_NAMESPACE="${KEYCLOAK_NAMESPACE:-keycloak}"
 SKIP_OVN_PATCH=false
 SKIP_MCP_GATEWAY=false
-MCP_GATEWAY_VERSION="0.4.0"
+SKIP_UI=false
+MCP_GATEWAY_VERSION="0.5.1"
 DRY_RUN=false
 
 # Colors
@@ -58,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --keycloak-namespace) KC_NAMESPACE="$2"; shift 2 ;;
     --skip-ovn-patch)     SKIP_OVN_PATCH=true; shift ;;
     --skip-mcp-gateway)   SKIP_MCP_GATEWAY=true; shift ;;
+    --skip-ui)            SKIP_UI=true; shift ;;
     --mcp-gateway-version) MCP_GATEWAY_VERSION="$2"; shift 2 ;;
     --dry-run)            DRY_RUN=true; shift ;;
     -h|--help)
@@ -69,6 +70,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --keycloak-namespace NS   Keycloak namespace (default: keycloak, or \$KEYCLOAK_NAMESPACE)"
       echo "  --skip-ovn-patch          Skip OVN gateway routing patch"
       echo "  --skip-mcp-gateway        Skip MCP Gateway installation"
+      echo "  --skip-ui                 Skip Kagenti UI and backend installation"
       echo "  --mcp-gateway-version VER MCP Gateway chart version (default: $MCP_GATEWAY_VERSION)"
       echo "  --dry-run                 Show commands without executing"
       echo "  -h, --help                Show this help"
@@ -89,6 +91,8 @@ run_cmd() {
 # ============================================================================
 # Pre-flight checks
 # ============================================================================
+START_SECONDS=$SECONDS
+
 echo ""
 echo "============================================"
 echo "  Kagenti Platform Setup"
@@ -215,9 +219,9 @@ log_success "Trust domain: $DOMAIN"
 echo ""
 
 # ============================================================================
-# Step 3: Install kagenti-deps (SPIRE + cert-manager)
+# Step 3: Install kagenti-deps
 # ============================================================================
-log_info "Step 3: Install kagenti-deps (SPIRE + cert-manager)"
+log_info "Step 3: Install kagenti-deps"
 
 # Pre-flight: ensure enableUserWorkload is set in cluster-monitoring-config.
 # The kagenti-deps chart has a kiali-operand hook that tries to REPLACE the entire
@@ -274,6 +278,18 @@ _wait_ns_gone() {
   log_success "  $ns terminated"
 }
 
+# Wait for the components we need before proceeding to the kagenti chart.
+# Skips MLflow (its oauth-secret is created by the kagenti chart's post-install hook).
+_wait_kagenti_deps_ready() {
+  if $DRY_RUN; then return; fi
+  log_info "Waiting for Keycloak..."
+  $KUBECTL rollout status deployment/keycloak -n "$KC_NAMESPACE" --timeout=300s 2>/dev/null || \
+    log_warn "Keycloak rollout not ready within 5m"
+  log_info "Waiting for Istio..."
+  $KUBECTL rollout status deployment/istiod -n istio-system --timeout=300s 2>/dev/null || \
+    log_warn "istiod rollout not ready within 5m"
+}
+
 _helm_kagenti_deps() {
   # Pre-flight: ensure namespaces managed by this chart are not stuck terminating
   # from a previous failed install/uninstall cycle
@@ -287,43 +303,31 @@ _helm_kagenti_deps() {
     log_info "kagenti-deps already installed — upgrading (hooks skipped)"
     run_cmd helm upgrade kagenti-deps "$KAGENTI_REPO/charts/kagenti-deps/" \
       -n kagenti-system \
-      --set spire.trustDomain="${DOMAIN}" --no-hooks --wait
+      --set spire.trustDomain="${DOMAIN}" \
+      --set components.kiali.enabled=false \
+      --set components.rhoai.enabled=true \
+      --set components.mlflow.enabled=true \
+      --set mlflow.auth.enabled=true \
+      --no-hooks
+    _wait_kagenti_deps_ready
     return $?
   fi
 
-  # Fresh install: try with hooks first (needed for SPIRE, Istio, Keycloak operand CRs)
+  # Fresh install: skip hooks (they commonly timeout or conflict with managed
+  # operators like cluster-monitoring-config). Operand CRs are applied manually after.
   log_info "Installing kagenti-deps..."
   run_cmd helm dependency update "$KAGENTI_REPO/charts/kagenti-deps/"
-  if run_cmd helm install kagenti-deps "$KAGENTI_REPO/charts/kagenti-deps/" \
-    -n kagenti-system --create-namespace \
-    --set spire.trustDomain="${DOMAIN}" --wait 2>&1; then
-    return 0
-  fi
-
-  # Check if the failure was the known cluster-monitoring-config conflict
-  local desc
-  desc=$(helm status kagenti-deps -n kagenti-system -o json 2>/dev/null | jq -r '.info.description // empty')
-  if ! echo "$desc" | grep -q "cluster-monitoring-config"; then
-    log_error "kagenti-deps install failed (not the known monitoring-config issue)"
-    return 1
-  fi
-
-  log_warn "Hook failed on cluster-monitoring-config (managed by another operator)"
-  log_info "Recovering: re-installing without hooks..."
-
-  # Uninstall the failed release and wait for namespaces to clear
-  helm uninstall kagenti-deps -n kagenti-system --no-hooks 2>/dev/null || true
-  for _ns in keycloak istio-cni istio-system istio-ztunnel; do
-    _wait_ns_gone "$_ns"
-  done
-
-  # Reinstall without hooks
   run_cmd helm install kagenti-deps "$KAGENTI_REPO/charts/kagenti-deps/" \
     -n kagenti-system --create-namespace \
-    --set spire.trustDomain="${DOMAIN}" --no-hooks --wait
+    --set spire.trustDomain="${DOMAIN}" \
+    --set components.kiali.enabled=false \
+    --set components.rhoai.enabled=true \
+    --set components.mlflow.enabled=true \
+    --set mlflow.auth.enabled=true \
+    --no-hooks
 
-  # Re-apply operand CRs that --no-hooks skipped (excluding the conflicting ConfigMap).
-  log_info "Applying operand CRs skipped by --no-hooks..."
+  # Apply operand CRs that --no-hooks skipped (excluding the conflicting ConfigMap).
+  log_info "Applying operand CRs..."
   helm get hooks kagenti-deps -n kagenti-system 2>/dev/null | python3 -c "
 import sys
 content = sys.stdin.read()
@@ -345,33 +349,270 @@ for doc in docs:
     print('---')
     print('\n'.join(lines))
 " | $KUBECTL apply -f - 2>/dev/null || true
-  log_success "kagenti-deps recovered (operand CRs applied)"
+  # Create otel-ingress-ca ConfigMap (normally done by pre-install hook Job,
+  # skipped by --no-hooks). MLflow and OTEL collector need this to verify
+  # Keycloak's TLS certificate via the OpenShift ingress CA.
+  if ! $KUBECTL get configmap otel-ingress-ca -n kagenti-system &>/dev/null 2>&1; then
+    log_info "Creating otel-ingress-ca ConfigMap..."
+    INGRESS_CA=$($KUBECTL get configmap default-ingress-cert \
+      -n openshift-config-managed -o jsonpath='{.data.ca-bundle\.crt}' 2>/dev/null || echo "")
+    ROOT_CA=$($KUBECTL get configmap kube-root-ca.crt \
+      -n openshift-config -o jsonpath='{.data.ca\.crt}' 2>/dev/null || echo "")
+    if [ -n "$INGRESS_CA" ]; then
+      CA_BUNDLE="$INGRESS_CA"
+      if [ -n "$ROOT_CA" ]; then
+        CA_BUNDLE="${CA_BUNDLE}"$'\n'"${ROOT_CA}"
+      fi
+      $KUBECTL create configmap otel-ingress-ca \
+        --from-literal=ca-bundle.crt="$CA_BUNDLE" \
+        -n kagenti-system 2>/dev/null || true
+      log_success "otel-ingress-ca ConfigMap created"
+    else
+      log_warn "Could not fetch ingress CA — otel-ingress-ca ConfigMap not created"
+    fi
+  fi
+
+  _wait_kagenti_deps_ready
 }
 _helm_kagenti_deps
 log_success "kagenti-deps installed"
 echo ""
 
 # ============================================================================
-# Step 4: Install MCP Gateway
+# Step 3b: Istio multi-mesh shared trust via cert-manager
 # ============================================================================
-log_info "Step 4: Install MCP Gateway"
+# Ported from kagenti Ansible installer (05_install_rhoai.yaml).
+#
+# When RHOAI is installed alongside Kagenti, two Istio control planes exist
+# (default + openshift-gateway) with different self-signed CAs. We create a
+# shared root CA via cert-manager so both istiods trust each other's workload
+# certificates. Without this, ztunnel fails with BadSignature errors and
+# pod-to-pod mTLS in ambient mode is broken.
 
-if $SKIP_MCP_GATEWAY; then
-  log_info "Skipped (--skip-mcp-gateway)"
-elif helm status mcp-gateway -n mcp-system &>/dev/null 2>&1; then
-  log_info "MCP Gateway already installed — skipping"
-else
-  log_info "Installing MCP Gateway v${MCP_GATEWAY_VERSION}..."
-  run_cmd helm install mcp-gateway oci://ghcr.io/kagenti/charts/mcp-gateway \
-    --create-namespace --namespace mcp-system --version "$MCP_GATEWAY_VERSION"
-  log_success "MCP Gateway installed"
-fi
+_adopt_for_helm() {
+  local kind="$1" name="$2" ns="${3:-}"
+  local ns_flag=()
+  if [ -n "$ns" ]; then ns_flag=(-n "$ns"); fi
+  if $KUBECTL get "$kind" "$name" "${ns_flag[@]}" &>/dev/null 2>&1; then
+    $KUBECTL label "$kind" "$name" "${ns_flag[@]}" \
+      app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+    $KUBECTL annotate "$kind" "$name" "${ns_flag[@]}" \
+      meta.helm.sh/release-name=kagenti-deps \
+      meta.helm.sh/release-namespace=kagenti-system --overwrite 2>/dev/null || true
+  fi
+}
+
+_wait_secret_ready() {
+  local secret="$1" ns="$2" tries=0
+  while ! $KUBECTL get secret "$secret" -n "$ns" -o jsonpath='{.data.tls\.crt}' 2>/dev/null | grep -q .; do
+    tries=$((tries + 1))
+    if [ $tries -ge 30 ]; then log_warn "$ns/$secret not ready after 5m"; return 1; fi
+    sleep 10
+  done
+  return 0
+}
+
+_ensure_rhoai_shared_trust() {
+  if $DRY_RUN; then return; fi
+
+  # --- Wait for cert-manager ---
+  log_info "Waiting for cert-manager CRDs..."
+  local tries=0
+  while ! $KUBECTL get crd certificates.cert-manager.io &>/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ $tries -ge 60 ]; then
+      log_warn "cert-manager CRDs not found after 5m — shared trust may need manual setup"
+      return 0
+    fi
+    sleep 5
+  done
+
+  log_info "Waiting for cert-manager webhook..."
+  tries=0
+  while ! $KUBECTL get deployment cert-manager-webhook -n cert-manager &>/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ $tries -ge 60 ]; then
+      log_warn "cert-manager webhook not found after 5m"
+      return 0
+    fi
+    sleep 5
+  done
+  $KUBECTL rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s 2>/dev/null || true
+
+  log_info "Waiting for cert-manager webhook endpoints..."
+  tries=0
+  while ! $KUBECTL get endpoints cert-manager-webhook -n cert-manager -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null | grep -q .; do
+    tries=$((tries + 1))
+    if [ $tries -ge 30 ]; then
+      log_warn "cert-manager webhook endpoints not ready after 2.5m"
+      break
+    fi
+    sleep 5
+  done
+  # Webhook endpoint has an IP but may still be bootstrapping TLS serving certs
+  sleep 10
+  log_success "cert-manager is ready"
+
+  # --- Create shared trust resources (fallback if Helm lookup skipped them) ---
+  log_info "Creating shared trust cert-manager resources..."
+  $KUBECTL apply -f - <<'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: istio-mesh-root-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: istio-mesh-root-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: istio-mesh-root-ca
+  duration: 87600h
+  renewBefore: 720h
+  secretName: istio-mesh-root-ca-secret
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: istio-mesh-root-selfsigned
+    kind: ClusterIssuer
+EOF
+
+  log_info "Waiting for root CA secret..."
+  if ! _wait_secret_ready istio-mesh-root-ca-secret cert-manager; then return 0; fi
+  log_success "Root CA secret ready"
+
+  $KUBECTL apply -f - <<'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: istio-mesh-ca
+spec:
+  ca:
+    secretName: istio-mesh-root-ca-secret
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: istio-cacerts-default
+  namespace: istio-system
+spec:
+  isCA: true
+  commonName: istio-ca-default
+  duration: 8760h
+  renewBefore: 720h
+  secretName: istio-cacerts-default-cert
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: istio-mesh-ca
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: istio-cacerts-openshift-gateway
+  namespace: openshift-ingress
+spec:
+  isCA: true
+  commonName: istio-ca-openshift-gateway
+  duration: 8760h
+  renewBefore: 720h
+  secretName: istio-cacerts-og-cert
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: istio-mesh-ca
+    kind: ClusterIssuer
+EOF
+
+  log_info "Waiting for intermediate CA secrets..."
+  _wait_secret_ready istio-cacerts-default-cert istio-system
+  _wait_secret_ready istio-cacerts-og-cert openshift-ingress
+  log_success "Intermediate CA secrets ready"
+
+  # --- Detect stale intermediate CAs (root CA regenerated but intermediates not re-signed) ---
+  log_info "Checking intermediate CA consistency..."
+  local ROOT_FP CHANGED=false
+  ROOT_FP=$($KUBECTL get secret istio-mesh-root-ca-secret -n cert-manager \
+    -o jsonpath='{.data.tls\.crt}' | base64 -d | \
+    openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')
+
+  for item in "istio-cacerts-default-cert:istio-system" "istio-cacerts-og-cert:openshift-ingress"; do
+    local secret="${item%%:*}" ns="${item##*:}"
+    local INTER_FP
+    INTER_FP=$($KUBECTL get secret "$secret" -n "$ns" \
+      -o jsonpath='{.data.ca\.crt}' | base64 -d | \
+      openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//')
+    if [ "$ROOT_FP" != "$INTER_FP" ]; then
+      log_warn "Root CA mismatch in $ns/$secret — forcing re-issuance"
+      $KUBECTL delete secret "$secret" -n "$ns"
+      CHANGED=true
+    fi
+  done
+
+  if $CHANGED; then
+    log_info "Waiting for re-issued intermediate CAs..."
+    _wait_secret_ready istio-cacerts-default-cert istio-system
+    _wait_secret_ready istio-cacerts-og-cert openshift-ingress
+    log_success "Intermediate CAs re-issued"
+  else
+    log_success "Intermediate CAs consistent with root"
+  fi
+
+  # --- Transform cert-manager secrets into Istio cacerts format ---
+  log_info "Creating Istio cacerts secrets..."
+  for item in "istio-cacerts-default-cert:istio-system" "istio-cacerts-og-cert:openshift-ingress"; do
+    local secret="${item%%:*}" ns="${item##*:}"
+    local CA_CERT CA_KEY ROOT_CERT CERT_CHAIN
+    CA_CERT=$($KUBECTL get secret "$secret" -n "$ns" -o jsonpath='{.data.tls\.crt}' | base64 -d)
+    CA_KEY=$($KUBECTL get secret "$secret" -n "$ns" -o jsonpath='{.data.tls\.key}' | base64 -d)
+    ROOT_CERT=$($KUBECTL get secret "$secret" -n "$ns" -o jsonpath='{.data.ca\.crt}' | base64 -d)
+    CERT_CHAIN="${CA_CERT}
+${ROOT_CERT}"
+    $KUBECTL create secret generic cacerts -n "$ns" \
+      --from-literal=ca-cert.pem="${CA_CERT}" \
+      --from-literal=ca-key.pem="${CA_KEY}" \
+      --from-literal=root-cert.pem="${ROOT_CERT}" \
+      --from-literal=cert-chain.pem="${CERT_CHAIN}" \
+      --dry-run=client -o yaml | $KUBECTL apply -f -
+  done
+  log_success "Istio cacerts secrets created"
+
+  # --- Restart istiods to pick up shared CA ---
+  log_info "Restarting istiods..."
+  if $KUBECTL get deployment/istiod -n istio-system &>/dev/null 2>&1; then
+    $KUBECTL rollout restart deployment/istiod -n istio-system
+    $KUBECTL rollout status deployment/istiod -n istio-system --timeout=300s 2>/dev/null || true
+  else
+    log_warn "deployment/istiod not found in istio-system — check kagenti-deps hooks"
+  fi
+  $KUBECTL rollout restart deployment/istiod-openshift-gateway -n openshift-ingress 2>/dev/null || true
+  $KUBECTL rollout status deployment/istiod-openshift-gateway -n openshift-ingress --timeout=300s 2>/dev/null || true
+
+  # --- Delete stale istio-ca-root-cert ConfigMaps and restart ztunnel ---
+  log_info "Cleaning up stale CA ConfigMaps and restarting ztunnel..."
+  for ns in kagenti-system gateway-system keycloak mcp-system istio-system istio-ztunnel; do
+    $KUBECTL delete configmap istio-ca-root-cert -n "$ns" --ignore-not-found 2>/dev/null || true
+  done
+
+  $KUBECTL rollout restart daemonset/ztunnel -n istio-ztunnel 2>/dev/null || true
+  $KUBECTL rollout status daemonset/ztunnel -n istio-ztunnel --timeout=300s 2>/dev/null || true
+  log_success "Shared trust reconciliation complete"
+}
+_ensure_rhoai_shared_trust
 echo ""
 
 # ============================================================================
-# Step 5: Install Kagenti (Keycloak + operator + webhook + UI)
+# Step 4: Install Kagenti (Keycloak + operator + webhook + UI)
 # ============================================================================
-log_info "Step 5: Install Kagenti (Keycloak + operator + webhook + UI)"
+log_info "Step 4: Install Kagenti (Keycloak + operator + webhook + UI)"
 
 # Secrets file
 SECRETS_FILE="$KAGENTI_REPO/charts/kagenti/.secrets.yaml"
@@ -387,14 +628,22 @@ if [ ! -f "$SECRETS_FILE" ]; then
   fi
 fi
 
-# Get latest tag
-log_info "Detecting latest kagenti release tag..."
-LATEST_TAG=$(git ls-remote --tags --sort="v:refname" https://github.com/kagenti/kagenti.git | tail -n1 | sed 's|.*refs/tags/v||; s/\^{}//')
-if [ -z "$LATEST_TAG" ]; then
-  log_warn "Could not detect latest tag — using 'latest'"
-  LATEST_TAG="latest"
+# Build UI helm flags
+KAGENTI_UI_FLAGS=()
+if $SKIP_UI; then
+  log_info "Kagenti UI: skipped (--skip-ui)"
+  KAGENTI_UI_FLAGS+=(--set components.ui.enabled=false)
+else
+  log_info "Detecting latest kagenti release tag..."
+  LATEST_TAG=$(git ls-remote --tags --sort="v:refname" https://github.com/kagenti/kagenti.git | tail -n1 | sed 's|.*refs/tags/v||; s/\^{}//')
+  if [ -z "$LATEST_TAG" ]; then
+    log_warn "Could not detect latest tag — using 'latest'"
+    LATEST_TAG="latest"
+  fi
+  log_success "Using tag: v${LATEST_TAG}"
+  KAGENTI_UI_FLAGS+=(--set "ui.frontend.tag=v${LATEST_TAG}")
+  KAGENTI_UI_FLAGS+=(--set "ui.backend.tag=v${LATEST_TAG}")
 fi
-log_success "Using tag: v${LATEST_TAG}"
 
 run_cmd helm dependency update "$KAGENTI_REPO/charts/kagenti/"
 
@@ -412,43 +661,94 @@ fi
 
 log_info "Keycloak: realm=$KC_REALM namespace=$KC_NAMESPACE"
 
+run_cmd $KUBECTL create namespace mcp-system --dry-run=client -o yaml | $KUBECTL apply -f -
+
 run_cmd helm upgrade --install kagenti "$KAGENTI_REPO/charts/kagenti/" \
   -n kagenti-system --create-namespace \
   -f "$SECRETS_FILE" \
-  --set ui.frontend.tag="v${LATEST_TAG}" \
-  --set ui.backend.tag="v${LATEST_TAG}" \
+  "${KAGENTI_UI_FLAGS[@]}" \
   --set "agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa" \
   --set uiOAuthSecret.useServiceAccountCA=false \
   --set agentOAuthSecret.useServiceAccountCA=false \
+  --set mlflowOAuthSecret.useServiceAccountCA=false \
+  --set mlflow.auth.enabled=true \
   --set "keycloak.publicUrl=${KEYCLOAK_PUBLIC_URL}" \
-  --set "keycloak.realm=${KC_REALM}" \
-  --set-json 'agentNamespaces=[]'
+  --set "keycloak.realm=${KC_REALM}"
 
 log_success "Kagenti installed"
 echo ""
 
 # ============================================================================
-# Step 6: Verify
+# Step 5: Install MCP Gateway
 # ============================================================================
-log_info "Step 6: Verify installation"
+log_info "Step 5: Install MCP Gateway"
+
+if $SKIP_MCP_GATEWAY; then
+  log_info "Skipped (--skip-mcp-gateway)"
+elif helm status mcp-gateway -n mcp-system &>/dev/null 2>&1; then
+  log_info "MCP Gateway already installed — skipping"
+else
+  log_info "Installing MCP Gateway v${MCP_GATEWAY_VERSION}..."
+  run_cmd helm install mcp-gateway oci://ghcr.io/kuadrant/charts/mcp-gateway \
+    --create-namespace --namespace mcp-system --version "$MCP_GATEWAY_VERSION"
+  log_success "MCP Gateway installed"
+fi
 echo ""
 
-log_info "SPIRE:"
-$KUBECTL get daemonsets -n zero-trust-workload-identity-manager 2>/dev/null || log_warn "SPIRE daemonsets not found"
+# ============================================================================
+# Step 6: Verify Helm releases
+# ============================================================================
+log_info "Step 6: Verify Helm releases"
+echo ""
+
+VERIFY_FAILED=false
+
+_verify_release() {
+  local release="$1" ns="$2"
+  log_info "helm history $release -n $ns:"
+  if ! helm history "$release" -n "$ns" --max 3 2>/dev/null; then
+    log_error "$release: no release found in $ns"
+    VERIFY_FAILED=true
+    return
+  fi
+  local status
+  status=$(helm status "$release" -n "$ns" -o json 2>/dev/null | jq -r '.info.status // empty')
+  if [ "$status" != "deployed" ]; then
+    log_error "$release: status is '$status' (expected 'deployed')"
+    VERIFY_FAILED=true
+  else
+    log_success "$release: deployed"
+  fi
+  echo ""
+}
+
+_verify_release kagenti-deps kagenti-system
+if ! $SKIP_MCP_GATEWAY; then
+  _verify_release mcp-gateway mcp-system
+fi
+_verify_release kagenti kagenti-system
+
+if $VERIFY_FAILED; then
+  log_error "One or more Helm releases failed verification — check output above"
+  exit 1
+fi
+
+# ============================================================================
+# Step 7: Show access info
+# ============================================================================
+log_info "Step 7: Access info"
 echo ""
 
 log_info "Kagenti pods:"
 $KUBECTL get pods -n kagenti-system 2>/dev/null || log_warn "No pods in kagenti-system"
 echo ""
 
-log_info "Keycloak pods:"
-$KUBECTL get pods -n "$KC_NAMESPACE" 2>/dev/null || log_warn "No pods in $KC_NAMESPACE"
-echo ""
-
 # Kagenti UI URL
-UI_HOST=$($KUBECTL get route kagenti-ui -n kagenti-system -o jsonpath='{.status.ingress[0].host}' 2>/dev/null || echo "")
-if [ -n "$UI_HOST" ]; then
-  log_success "Kagenti UI: https://$UI_HOST"
+if ! $SKIP_UI; then
+  UI_HOST=$($KUBECTL get route kagenti-ui -n kagenti-system -o jsonpath='{.status.ingress[0].host}' 2>/dev/null || echo "")
+  if [ -n "$UI_HOST" ]; then
+    log_success "Kagenti UI: https://$UI_HOST"
+  fi
 fi
 
 # Keycloak admin credentials (master realm — for admin console only)
@@ -457,9 +757,13 @@ if [ -n "$KC_SECRET" ]; then
   log_success "Keycloak admin (master realm): $KC_SECRET"
 fi
 
+ELAPSED=$(( SECONDS - START_SECONDS ))
+MINS=$(( ELAPSED / 60 ))
+SECS=$(( ELAPSED % 60 ))
+
 echo ""
 echo "============================================"
-echo "  Kagenti platform is ready!"
+echo "  Kagenti platform is ready!  (Time elapsed:${MINS}m ${SECS}s)"
 echo ""
 echo "  Namespace registration:"
 echo "    Namespaces self-register for webhook injection via label:"
