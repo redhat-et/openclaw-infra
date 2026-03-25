@@ -89,6 +89,32 @@ run_cmd() {
   fi
 }
 
+_ensure_helm_repo_cache() {
+  if $DRY_RUN; then return; fi
+
+  local repo_cache
+  repo_cache=$(helm env | sed -n 's/^HELM_REPOSITORY_CACHE="\([^\"]*\)"$/\1/p')
+  if [ -z "$repo_cache" ] || [ ! -d "$repo_cache" ]; then
+    return
+  fi
+
+  local repaired_any=false
+  while IFS=$'\t' read -r repo_name _repo_url; do
+    [ -n "$repo_name" ] || continue
+    if [ ! -f "$repo_cache/${repo_name}-index.yaml" ]; then
+      if [ "$repaired_any" = false ]; then
+        log_info "Repairing missing Helm repo cache entries..."
+        repaired_any=true
+      fi
+      helm repo update "$repo_name" >/dev/null
+    fi
+  done < <(helm repo list -o json 2>/dev/null | jq -r '.[] | [.name, .url] | @tsv')
+
+  if [ "$repaired_any" = true ]; then
+    log_success "Helm repo cache repaired"
+  fi
+}
+
 # ============================================================================
 # Pre-flight checks
 # ============================================================================
@@ -291,12 +317,104 @@ _wait_kagenti_deps_ready() {
     log_warn "istiod rollout not ready within 5m"
 }
 
+_adopt_for_helm() {
+  local kind="$1" name="$2" ns="${3:-}"
+  if [ -n "$ns" ]; then
+    if $KUBECTL get "$kind" "$name" -n "$ns" &>/dev/null 2>&1; then
+      $KUBECTL label "$kind" "$name" -n "$ns" \
+        app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+      $KUBECTL annotate "$kind" "$name" -n "$ns" \
+        meta.helm.sh/release-name=kagenti-deps \
+        meta.helm.sh/release-namespace=kagenti-system --overwrite 2>/dev/null || true
+    fi
+  elif $KUBECTL get "$kind" "$name" &>/dev/null 2>&1; then
+    $KUBECTL label "$kind" "$name" \
+      app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
+    $KUBECTL annotate "$kind" "$name" \
+      meta.helm.sh/release-name=kagenti-deps \
+      meta.helm.sh/release-namespace=kagenti-system --overwrite 2>/dev/null || true
+  fi
+}
+
+_adopt_existing_kagenti_deps_namespaces() {
+  if $DRY_RUN; then return; fi
+
+  local adopted_any=false
+  for _ns in cert-manager istio-cni istio-system istio-ztunnel keycloak zero-trust-workload-identity-manager; do
+    if $KUBECTL get namespace "$_ns" &>/dev/null 2>&1; then
+      if [ "$adopted_any" = false ]; then
+        log_info "Adopting pre-existing namespaces for Helm ownership..."
+        adopted_any=true
+      fi
+      _adopt_for_helm namespace "$_ns"
+    fi
+  done
+
+  if [ "$adopted_any" = true ]; then
+    log_success "Existing kagenti-deps namespaces labeled for Helm adoption"
+  fi
+}
+
+_adopt_existing_kagenti_deps_resources() {
+  if $DRY_RUN; then return; fi
+
+  local adopted_any=false
+  local keycloak_ns="${KC_NAMESPACE}"
+
+  # Fresh clusters sometimes come with a partially created Keycloak stack from an
+  # earlier failed install or day-0 bootstrap. Adopt the fixed-name resources the
+  # chart owns so Helm can proceed instead of erroring on the first collision.
+  for item in \
+    "route:keycloak:${keycloak_ns}" \
+    "keycloak:keycloak:${keycloak_ns}" \
+    "configmap:postgres-kc-init-script:${keycloak_ns}" \
+    "statefulset:postgres-kc:${keycloak_ns}" \
+    "service:postgres-kc:${keycloak_ns}" \
+    "secret:keycloak-db-secret:${keycloak_ns}"
+  do
+    local kind="${item%%:*}"
+    local rest="${item#*:}"
+    local name="${rest%%:*}"
+    local ns="${rest##*:}"
+    if $KUBECTL get "$kind" "$name" -n "$ns" &>/dev/null 2>&1; then
+      if [ "$adopted_any" = false ]; then
+        log_info "Adopting pre-existing keycloak resources for Helm ownership..."
+        adopted_any=true
+      fi
+      _adopt_for_helm "$kind" "$name" "$ns"
+    fi
+  done
+
+  if [ "$adopted_any" = true ]; then
+    log_success "Existing kagenti-deps keycloak resources labeled for Helm adoption"
+  fi
+}
+
+_prepare_keycloak_route_for_helm() {
+  if $DRY_RUN; then return; fi
+
+  # A reused keycloak namespace can contain a Route/keycloak created by another
+  # field manager (commonly OpenAPI-Generator). Helm's server-side apply will
+  # then fail on spec field ownership even after metadata adoption. Deleting the
+  # route is safe here because the chart recreates it immediately.
+  if $KUBECTL get route keycloak -n "$KC_NAMESPACE" &>/dev/null 2>&1; then
+    log_info "Deleting pre-existing keycloak route so Helm can recreate it..."
+    $KUBECTL delete route keycloak -n "$KC_NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+}
+
 _helm_kagenti_deps() {
   # Pre-flight: ensure namespaces managed by this chart are not stuck terminating
   # from a previous failed install/uninstall cycle
   for _ns in keycloak istio-cni istio-system istio-ztunnel; do
     _wait_ns_gone "$_ns"
   done
+
+  # Some clusters already have namespaces from prior attempts or day-0 setup.
+  # Helm refuses to create/import them unless ownership metadata matches.
+  _adopt_existing_kagenti_deps_namespaces
+  _adopt_existing_kagenti_deps_resources
+  _prepare_keycloak_route_for_helm
 
   if helm status kagenti-deps -n kagenti-system &>/dev/null 2>&1; then
     # Upgrade path: skip hooks (operands already exist, and the kiali hook will fail
@@ -318,6 +436,7 @@ _helm_kagenti_deps() {
   # Fresh install: skip hooks (they commonly timeout or conflict with managed
   # operators like cluster-monitoring-config). Operand CRs are applied manually after.
   log_info "Installing kagenti-deps..."
+  _ensure_helm_repo_cache
   run_cmd helm dependency update "$KAGENTI_REPO/charts/kagenti-deps/"
   run_cmd helm install kagenti-deps "$KAGENTI_REPO/charts/kagenti-deps/" \
     -n kagenti-system --create-namespace \
@@ -391,19 +510,6 @@ echo ""
 # shared root CA via cert-manager so both istiods trust each other's workload
 # certificates. Without this, ztunnel fails with BadSignature errors and
 # pod-to-pod mTLS in ambient mode is broken.
-
-_adopt_for_helm() {
-  local kind="$1" name="$2" ns="${3:-}"
-  local ns_flag=()
-  if [ -n "$ns" ]; then ns_flag=(-n "$ns"); fi
-  if $KUBECTL get "$kind" "$name" "${ns_flag[@]}" &>/dev/null 2>&1; then
-    $KUBECTL label "$kind" "$name" "${ns_flag[@]}" \
-      app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null || true
-    $KUBECTL annotate "$kind" "$name" "${ns_flag[@]}" \
-      meta.helm.sh/release-name=kagenti-deps \
-      meta.helm.sh/release-namespace=kagenti-system --overwrite 2>/dev/null || true
-  fi
-}
 
 _wait_secret_ready() {
   local secret="$1" ns="$2" tries=0
@@ -648,6 +754,7 @@ else
   KAGENTI_UI_FLAGS+=(--set "ui.backend.tag=v${LATEST_TAG}")
 fi
 
+_ensure_helm_repo_cache
 run_cmd helm dependency update "$KAGENTI_REPO/charts/kagenti/"
 
 # Detect Keycloak public URL from route (for OIDC redirects in the browser).

@@ -70,6 +70,16 @@ echo "Trust domain: $DOMAIN"
 
 ```bash
 cd <path-to-kagenti-repo>
+
+# If the cluster or a prior failed install already created chart-owned namespaces,
+# adopt them before Helm install so it can manage them.
+for ns in cert-manager istio-cni istio-system istio-ztunnel keycloak zero-trust-workload-identity-manager; do
+  kubectl get namespace "$ns" >/dev/null 2>&1 || continue
+  kubectl label namespace "$ns" app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl annotate namespace "$ns" meta.helm.sh/release-name=kagenti-deps \
+    meta.helm.sh/release-namespace=kagenti-system --overwrite
+done
+
 helm dependency update ./charts/kagenti-deps/
 helm install kagenti-deps ./charts/kagenti-deps/ \
   -n kagenti-system --create-namespace \
