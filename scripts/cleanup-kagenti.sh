@@ -66,8 +66,7 @@ echo "  - Certificates: istio-mesh-root-ca, istio-cacerts-openshift-gateway"
 echo ""
 
 if ! $AUTO_YES; then
-  read -p "Continue? (y/N): " -n 1 -r
-  echo
+  read -p "Continue? (y/N): " -r
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_info "Cleanup cancelled"
     exit 0

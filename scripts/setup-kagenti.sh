@@ -5,6 +5,7 @@
 # Installs the Kagenti stack (SPIRE, cert-manager, Keycloak, operator, webhook,
 # MCP Gateway) on an OpenShift cluster. Run this BEFORE setup.sh --with-a2a.
 # Prometheus/Kiali are disabled. UI/backend installed by default (use --skip-ui to disable).
+# MLflow/Shipwright disabled (not needed).
 #
 # Usage:
 #   ./scripts/setup-kagenti.sh                              # Auto-clones kagenti main to ~/.cache/kagenti
@@ -306,8 +307,9 @@ _helm_kagenti_deps() {
       --set spire.trustDomain="${DOMAIN}" \
       --set components.kiali.enabled=false \
       --set components.rhoai.enabled=true \
-      --set components.mlflow.enabled=true \
-      --set mlflow.auth.enabled=true \
+      --set components.mlflow.enabled=false \
+      --set components.shipwright.enabled=false \
+      --set mlflow.auth.enabled=false \
       --no-hooks
     _wait_kagenti_deps_ready
     return $?
@@ -322,8 +324,9 @@ _helm_kagenti_deps() {
     --set spire.trustDomain="${DOMAIN}" \
     --set components.kiali.enabled=false \
     --set components.rhoai.enabled=true \
-    --set components.mlflow.enabled=true \
-    --set mlflow.auth.enabled=true \
+    --set components.mlflow.enabled=false \
+    --set components.shipwright.enabled=false \
+    --set mlflow.auth.enabled=false \
     --no-hooks
 
   # Apply operand CRs that --no-hooks skipped (excluding the conflicting ConfigMap).
@@ -671,7 +674,7 @@ run_cmd helm upgrade --install kagenti "$KAGENTI_REPO/charts/kagenti/" \
   --set uiOAuthSecret.useServiceAccountCA=false \
   --set agentOAuthSecret.useServiceAccountCA=false \
   --set mlflowOAuthSecret.useServiceAccountCA=false \
-  --set mlflow.auth.enabled=true \
+  --set mlflow.auth.enabled=false \
   --set "keycloak.publicUrl=${KEYCLOAK_PUBLIC_URL}" \
   --set "keycloak.realm=${KC_REALM}"
 
