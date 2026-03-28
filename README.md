@@ -2,6 +2,16 @@
 
 Deploy [OpenClaw](https://github.com/openclaw) on Kubernetes, OpenShift, and standalone Linux machines.
 
+## Repository Status
+
+Active OpenClaw installer, OpenShift deployment, and Kagenti A2A work has shifted to:
+
+- `github.com/sallyom/openclaw-installer`
+
+Use that repository for current OpenClaw and Kagenti A2A development.
+
+This repository still contains older infra scripts and reference material, but it is no longer the primary location for active installer work.
+
 > All deployments use the `quay.io/aicatalyst/openclaw:latest` container image, which tracks upstream `openclaw/openclaw` main and adds full OpenTelemetry instrumentation via the `diagnostics-otel` extension. This ensures every agent action — tool calls, LLM inference, message lifecycle — is traced end-to-end in MLflow.
 >
 > **Note:** Until GitHub Actions CI is set up for automated builds, deployments default to `quay.io/sallyom/openclaw:latest`. Override via `OPENCLAW_IMAGE` env var.
