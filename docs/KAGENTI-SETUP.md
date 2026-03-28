@@ -1,41 +1,98 @@
 # Kagenti Platform Setup (OpenShift)
 
-Repeatable steps for deploying the Kagenti zero-trust agent platform on a fresh OpenShift cluster. Tested on OCP 4.19.24 (ROSA).
+Repeatable steps for deploying the Kagenti zero-trust agent platform on a fresh OpenShift cluster. Tested on OpenShift 4.19/4.20.
 
 ## What Gets Installed
 
-| Step | Helm Chart | Components | Namespace |
-|------|-----------|------------|-----------|
-| 1 | `kagenti-deps` | SPIRE (ZTWIM operator), cert-manager | `kagenti-system`, `zero-trust-workload-identity-manager` |
-| 2 | `mcp-gateway` | MCP Gateway (Model Context Protocol) | `mcp-system` |
-| 3 | `kagenti` | Keycloak, kagenti operator, webhook, UI | `kagenti-system`, `keycloak` |
+| Step | Chart / Resource | Components | Namespace |
+|------|------------------|------------|-----------|
+| 1 | `kagenti-deps` | Istio ambient pieces, SPIRE / ZTWIM, cert-manager, Keycloak operator prerequisites | `kagenti-system`, `zero-trust-workload-identity-manager`, `keycloak`, `istio-*` |
+| 2 | `kagenti` | Keycloak, kagenti operator, webhook, UI/backend, SCC/RBAC | `kagenti-system`, `keycloak`, `kagenti-webhook-system` |
+| 3 | `kagenti-namespace-controller` | Watches `kagenti-enabled=true` namespaces and reconciles Kagenti namespace config | `kagenti-system` |
+| 4 | `mcp-gateway` | MCP Gateway (Model Context Protocol) | `mcp-system` |
 
-After Kagenti is running, deploy agents (e.g. OpenClaw) with `kagenti.io/inject: enabled` labels — the webhook automatically injects Auth Identity Bridge sidecars.
+After Kagenti is running, deploy agents (e.g. OpenClaw) with `kagenti.io/inject: enabled` labels. The webhook injects the Auth Identity Bridge sidecars, and the namespace controller backfills the namespace-scoped ConfigMaps/RoleBindings/SCC membership that the current Kagenti operator path does not yet reconcile on OpenShift.
 
 ## Prerequisites
 
-- OpenShift 4.19+ (4.16+ works with Helm-based SPIRE fallback)
+- OpenShift 4.19+
 - `oc` or `kubectl` with **cluster-admin**
 - `helm` >= 3.18.0
-- Clone of kagenti repo — use [sallyom/kagenti](https://github.com/sallyom/kagenti) **branch `charts-updated-webhook`** until port exclusion annotation support is merged upstream. This branch overrides the webhook image with `quay.io/sallyom/kagenti-webhook:latest`, which adds `kagenti.io/outbound-ports-exclude` and `kagenti.io/inbound-ports-exclude` pod annotation support.
+- Python 3 for manifest templating in the helper script
 
 ## Quick Start (Automated)
 
 ```bash
-./scripts/setup-kagenti.sh
+./scripts/kagenti-setup-works-for-sally.sh
 ```
 
-The script is interactive — it auto-detects your kagenti repo (expects `../kagenti` relative to this repo), prompts for agent namespaces, and runs all steps below. It's idempotent (safe to re-run) and supports `--dry-run` to preview commands.
+`scripts/setup-kagenti.sh` is kept aligned to `upstream/main`.
+
+For the OpenShift flow documented here, use:
+
+- `scripts/kagenti-setup-works-for-sally.sh`
+
+That script currently clones Kagenti at a pinned working commit:
+
+- `5a3eab8d1c4267defe3dbfe9e78c5a3917c77366`
+
+That pinned repo currently resolves to these working chart versions:
+
+- `kagenti` chart `0.1.2`
+- `kagenti-operator-chart` `0.2.0-alpha.22`
+- `kagenti-webhook-chart` `0.4.0-alpha.9`
+- `mcp-gateway` chart `0.5.1`
+
+The script is intended to be idempotent and safe to re-run. It supports `--dry-run` to preview commands.
 
 Options:
 ```
---kagenti-repo PATH       Path to local kagenti repo clone
---agent-namespaces NS     Comma-separated namespaces for agent injection
+--kagenti-repo PATH|URL   Local path or Git URL for Kagenti
+--kagenti-ref REF         Git ref to use when cloning Kagenti (default: pinned working ref)
+--kagenti-ui-tag TAG      UI/backend image tag (default: chart appVersion)
+--realm REALM             Keycloak realm
 --skip-ovn-patch          Skip OVN gateway routing patch
+--cert-manager-mode MODE  redhat-operator|community-operator|manifests
 --skip-mcp-gateway        Skip MCP Gateway installation
---mcp-gateway-version VER MCP Gateway chart version (default: 0.4.0)
+--mcp-gateway-version VER MCP Gateway chart version (default: 0.5.1)
 --dry-run                 Show commands without executing
 ```
+
+To intentionally track upstream instead of the pinned working ref:
+
+```bash
+./scripts/kagenti-setup-works-for-sally.sh --kagenti-ref main
+```
+
+## What `kagenti-setup-works-for-sally.sh` Does
+
+Cluster-admin runs this once per cluster. The script now does all of the following:
+
+1. Applies the OVN patch required for ambient mode on OVNKubernetes clusters.
+2. Detects the trust domain from the cluster base domain.
+3. Installs `kagenti-deps`.
+4. Waits for cert-manager to become usable before installing Kagenti resources that need `Issuer` / `Certificate`.
+5. Reconciles the shared trust material used by the mesh.
+6. Installs `kagenti`.
+7. Deploys `kagenti-namespace-controller`.
+8. Installs `mcp-gateway` unless skipped.
+
+The namespace controller is important. It watches namespaces labeled:
+
+- `kagenti-enabled=true`
+
+For each such namespace it reconciles:
+
+- `ConfigMap/environments`
+- `ConfigMap/authbridge-config`
+- `ConfigMap/envoy-config`
+- `ConfigMap/spiffe-helper-config`
+- `RoleBinding/agent-authbridge-scc`
+- `RoleBinding/pipeline-privileged-scc`
+- `RoleBinding/openclaw-oauth-proxy-privileged-scc`
+- `SecurityContextConstraints/kagenti-authbridge` membership for `system:serviceaccounts:<namespace>`
+
+This is the gap-filling behavior we need on OpenShift today: the Kagenti install path gets the platform up, but the per-namespace Kagenti enrollment state is not fully reconciled upstream yet.
 
 ## Manual Steps
 
@@ -66,7 +123,7 @@ echo "Trust domain: $DOMAIN"
 
 ### Step 3: Install kagenti-deps (SPIRE + cert-manager)
 
-#### From local repo (recommended — use sallyom/kagenti branch charts-updated-webhook)
+#### From local repo
 
 ```bash
 cd <path-to-kagenti-repo>
@@ -86,7 +143,7 @@ helm install kagenti-deps ./charts/kagenti-deps/ \
   --set spire.trustDomain=${DOMAIN} --wait
 ```
 
-#### From OCI registry (after fix is released)
+#### From OCI registry
 
 ```bash
 LATEST_TAG=$(git ls-remote --tags --sort="v:refname" \
@@ -126,36 +183,31 @@ cp charts/kagenti/.secrets_template.yaml charts/kagenti/.secrets.yaml
 # Update chart dependencies
 helm dependency update ./charts/kagenti/
 
-# Get latest tag for UI images
-LATEST_TAG=$(git ls-remote --tags --sort="v:refname" \
-  https://github.com/kagenti/kagenti.git | tail -n1 | sed 's|.*refs/tags/v||; s/\^{}//')
-
 # Install — include all agent namespaces in agentNamespaces list.
-# Kagenti creates AIB ConfigMaps (envoy-config, spiffe-helper-config,
-# authbridge-config, environments) and SCC RoleBindings in each namespace.
-# These are required for webhook-injected sidecars to start.
+# In this repo we now prefer the namespace controller path instead of relying
+# on Helm agentNamespaces to pre-declare every participating namespace.
 helm upgrade --install kagenti ./charts/kagenti/ \
   -n kagenti-system --create-namespace \
   -f ./charts/kagenti/.secrets.yaml \
-  --set ui.frontend.tag=v${LATEST_TAG} \
-  --set ui.backend.tag=v${LATEST_TAG} \
-  --set 'agentNamespaces={sallyom-openclaw,bob-openclaw,nps-agent}' \
+  --set ui.frontend.tag=v0.1.2 \
+  --set ui.backend.tag=v0.1.2 \
   --set agentOAuthSecret.spiffePrefix=spiffe://${DOMAIN}/sa \
   --set uiOAuthSecret.useServiceAccountCA=false \
   --set agentOAuthSecret.useServiceAccountCA=false
 ```
 
-#### Adding agent namespaces after install
+#### Namespace onboarding after install
 
-Agent namespaces must be registered with Kagenti so the webhook-injected sidecars get their required ConfigMaps. To add a namespace after initial install:
+Namespace onboarding now happens through the controller, not `agentNamespaces`.
 
-1. If the namespace already exists, label it for Helm adoption:
-   ```bash
-   kubectl label namespace <ns> app.kubernetes.io/managed-by=Helm --overwrite
-   kubectl annotate namespace <ns> meta.helm.sh/release-name=kagenti \
-     meta.helm.sh/release-namespace=kagenti-system --overwrite
-   ```
-2. Re-run `helm upgrade` with the updated `agentNamespaces` list.
+To enroll a namespace:
+
+```bash
+kubectl label namespace <ns> kagenti-enabled=true
+```
+
+The controller creates the Kagenti ConfigMaps and RoleBindings and updates the
+OpenShift SCC membership automatically.
 
 ### Step 6: Verify
 
@@ -262,9 +314,17 @@ helm upgrade kagenti ...
 
 ### Agent namespaces must be registered with Kagenti
 
-The webhook injects sidecars that mount 4 ConfigMaps (`envoy-config`, `spiffe-helper-config`, `authbridge-config`, `environments`). These are only created in namespaces listed in `agentNamespaces` during `helm install/upgrade`. Pods in unregistered namespaces will fail with `CreateContainerConfigError` (configmap not found). There is currently no dynamic namespace registration — this must be done via `helm upgrade` with an updated list.
+The webhook injects sidecars that mount 4 ConfigMaps (`envoy-config`, `spiffe-helper-config`, `authbridge-config`, `environments`). In upstream Kagenti today, this namespace enrollment is still awkward on OpenShift.
 
-**Kagenti gap — file upstream issue:** Ideally, labeling a namespace with `kagenti-enabled=true` should trigger the operator to bootstrap the 4 required ConfigMaps automatically. Today, the only mechanism is the static `agentNamespaces` list in the Helm chart's `agent-namespaces.yaml` template.
+In this repo, `kagenti-setup-works-for-sally.sh` installs `kagenti-namespace-controller` to close that gap. Instead of predeclaring namespaces in `agentNamespaces`, a namespace is enrolled by labeling it:
+
+```bash
+kubectl label namespace <ns> kagenti-enabled=true
+```
+
+The controller then reconciles the required ConfigMaps, RoleBindings, and SCC membership automatically.
+
+**Kagenti gap to upstream:** This namespace enrollment behavior should ultimately live in Kagenti’s operator/webhook path rather than in a local helper controller.
 
 ### AgentCard requires `/.well-known/agent.json` endpoint
 
