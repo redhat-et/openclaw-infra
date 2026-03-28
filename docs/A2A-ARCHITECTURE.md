@@ -223,7 +223,7 @@ Agents never handle authentication — the AuthBridge does it transparently. The
 A2A requires the Kagenti platform stack. Install it before deploying agents:
 
 ```bash
-./scripts/setup-kagenti.sh
+./scripts/kagenti-setup-works-for-sally.sh
 ```
 
 See [KAGENTI-SETUP.md](KAGENTI-SETUP.md) for detailed steps. The stack provides:
@@ -241,7 +241,7 @@ See [KAGENTI-SETUP.md](KAGENTI-SETUP.md) for detailed steps. The stack provides:
 
 ```bash
 # 1. Install Kagenti platform (SPIRE, Keycloak, operator, webhook)
-./scripts/setup-kagenti.sh
+./scripts/kagenti-setup-works-for-sally.sh
 
 # 2. Deploy OpenClaw with A2A enabled
 ./scripts/setup.sh --with-a2a
@@ -283,7 +283,7 @@ oc exec deployment/openclaw -c gateway -- \
 | `agents/openclaw/skills/a2a/SKILL.md` | A2A skill for agents |
 | `agents/openclaw/skills/kustomization.yaml` | Skill ConfigMap generator |
 | `agents/openclaw/skills/install-a2a-skill.sh` | Install skill into running pod |
-| `scripts/setup-kagenti.sh` | Kagenti platform installation script |
+| `scripts/kagenti-setup-works-for-sally.sh` | Working OpenShift Kagenti platform installation script |
 | `docs/KAGENTI-SETUP.md` | Kagenti setup guide and known issues |
 
 ## Limitations

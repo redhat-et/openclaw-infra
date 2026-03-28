@@ -48,6 +48,14 @@ docker-compose.extra.yml
 Dockerfile.openshift
 manifests-private/
 manifests/
+!manifests/
+manifests/*
+!manifests/kagenti-namespace-controller/
+!manifests/kagenti-namespace-controller/controller.yaml.envsubst
+!manifests/kagenti-namespace-controller/README.md
+!manifests/kagenti-namespace-enrollment/
+!manifests/kagenti-namespace-enrollment/README.md
+!manifests/kagenti-namespace-enrollment/kagenti-namespace-enrollment.yaml.envsubst
 # Agent overlays
 agents/openclaw/overlays/openshift/kustomization.yaml
 agents/openclaw/overlays/openshift/secrets-patch.yaml

@@ -58,11 +58,13 @@ echo "============================================"
 echo ""
 echo "This will remove:"
 echo "  - Helm releases: kagenti, mcp-gateway, kagenti-deps"
-echo "  - Namespaces: kagenti-system, mcp-system, gateway-system, keycloak, istio-cni,"
+echo "  - Namespaces: kagenti-system, kagenti-webhook-system, mcp-system, gateway-system, keycloak, istio-cni,"
 echo "    istio-system, istio-ztunnel, openshift-builds,"
 echo "    zero-trust-workload-identity-manager, cert-manager-operator, cert-manager"
 echo "  - ClusterIssuers: istio-mesh-root-selfsigned, istio-mesh-ca"
 echo "  - Certificates: istio-mesh-root-ca, istio-cacerts-openshift-gateway"
+echo "  - Controller resources: Deployment/ConfigMap/ServiceAccount kagenti-namespace-controller"
+echo "  - Cluster RBAC: kagenti-namespace-controller"
 echo ""
 
 if ! $AUTO_YES; then
@@ -144,6 +146,7 @@ echo ""
 log_info "Step 2: Deleting namespaces..."
 
 _delete_ns kagenti-system &
+_delete_ns kagenti-webhook-system &
 _delete_ns keycloak       &
 _delete_ns istio-cni      &
 _delete_ns istio-system   &
@@ -201,9 +204,34 @@ done
 echo ""
 
 # ---------------------------------------------------------------------------
-# Step 5: Remove cert-manager OLM operator + namespaces (must be last)
+# Step 5: Remove namespace controller
 # ---------------------------------------------------------------------------
-log_info "Step 5: Removing cert-manager operator..."
+log_info "Step 5: Removing Kagenti namespace controller..."
+
+for resource in \
+  "deployment/kagenti-namespace-controller" \
+  "configmap/kagenti-namespace-controller" \
+  "serviceaccount/kagenti-namespace-controller"
+do
+  $KUBECTL delete "$resource" -n kagenti-system --ignore-not-found >/dev/null 2>&1 && \
+    log_success "  ${resource} deleted" || \
+    log_warn "  Failed to delete ${resource}"
+done
+
+for resource in \
+  "clusterrolebinding/kagenti-namespace-controller" \
+  "clusterrole/kagenti-namespace-controller"
+do
+  $KUBECTL delete "$resource" --ignore-not-found >/dev/null 2>&1 && \
+    log_success "  ${resource} deleted" || \
+    log_warn "  Failed to delete ${resource}"
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# Step 6: Remove cert-manager OLM operator + namespaces (must be last)
+# ---------------------------------------------------------------------------
+log_info "Step 6: Removing cert-manager operator..."
 
 $KUBECTL delete subscription --all -n cert-manager-operator --timeout=30s 2>/dev/null && \
   log_success "  cert-manager Subscription deleted" || \
@@ -229,5 +257,5 @@ echo "============================================"
 echo "  Kagenti Cleanup Complete  (${MINS}m ${SECS}s)"
 echo "============================================"
 echo ""
-echo "To redeploy, run: ./scripts/setup-kagenti.sh"
+echo "To redeploy the working OpenShift flow, run: ./scripts/kagenti-setup-works-for-sally.sh"
 echo ""
