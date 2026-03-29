@@ -1,0 +1,25 @@
+OpenClaw has been deployed to namespace: {{ .Release.Namespace }}
+
+Mode: {{ .Values.mode }}
+Agent: {{ .Values.agent.displayName }} ({{ include "openclaw.agentId" . }})
+Model: {{ include "openclaw.defaultAgentModel" . }}
+
+{{- if eq .Values.mode "openshift" }}
+{{- if .Values.clusterDomain }}
+
+Access URL:
+  https://openclaw-{{ .Release.Namespace }}.{{ .Values.clusterDomain }}
+{{- else }}
+
+Run the following to get the route URL:
+  oc get route openclaw -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}'
+{{- end }}
+{{- else }}
+
+Access via port-forward:
+  kubectl port-forward svc/openclaw 18789:18789 -n {{ .Release.Namespace }}
+  Open: http://localhost:18789
+{{- end }}
+
+Gateway token (for API access):
+  kubectl get secret openclaw-secrets -n {{ .Release.Namespace }} -o jsonpath='{.data.OPENCLAW_GATEWAY_TOKEN}' | base64 -d

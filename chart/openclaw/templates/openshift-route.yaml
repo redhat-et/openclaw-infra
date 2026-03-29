@@ -1,0 +1,24 @@
+{{- if eq .Values.mode "openshift" }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: openclaw
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+  annotations:
+    haproxy.router.openshift.io/timeout: 30m
+spec:
+  {{- if .Values.clusterDomain }}
+  host: openclaw-{{ .Release.Namespace }}.{{ .Values.clusterDomain }}
+  {{- end }}
+  to:
+    kind: Service
+    name: openclaw
+    weight: 100
+  port:
+    targetPort: oauth-ui
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+{{- end }}

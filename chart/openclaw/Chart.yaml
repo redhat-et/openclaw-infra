@@ -1,0 +1,12 @@
+apiVersion: v2
+name: openclaw
+description: OpenClaw AI Agent Gateway for OpenShift and Kubernetes
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - ai
+  - agent
+  - openclaw
+  - a2a
+home: https://github.com/openclaw

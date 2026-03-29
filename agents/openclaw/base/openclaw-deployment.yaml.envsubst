@@ -279,7 +279,7 @@ spec:
       # into OpenAI chat completions against the local gateway on :18789.
       # Also serves /.well-known/agent.json and agent-card.json for operator discovery.
       - name: agent-card
-        image: registry.redhat.io/ubi9:latest
+        image: registry.access.redhat.com/ubi9:latest
         command: ["python3", "-u", "/scripts/a2a-bridge.py"]
         ports:
         - name: a2a

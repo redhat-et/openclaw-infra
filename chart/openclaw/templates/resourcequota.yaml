@@ -1,0 +1,20 @@
+{{- if .Values.quota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: openclaw-quota
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.quota.requests.cpu | quote }}
+    requests.memory: {{ .Values.quota.requests.memory | quote }}
+    limits.cpu: {{ .Values.quota.limits.cpu | quote }}
+    limits.memory: {{ .Values.quota.limits.memory | quote }}
+    pods: {{ .Values.quota.pods | quote }}
+    services: {{ .Values.quota.services | quote }}
+    configmaps: {{ .Values.quota.configmaps | quote }}
+    secrets: {{ .Values.quota.secrets | quote }}
+    persistentvolumeclaims: {{ .Values.quota.pvcs | quote }}
+    requests.storage: {{ .Values.quota.storage | quote }}
+{{- end }}

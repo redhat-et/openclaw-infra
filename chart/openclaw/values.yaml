@@ -1,0 +1,160 @@
+# OpenClaw Helm Chart Values
+
+# -- Deployment mode: "openshift" or "kubernetes"
+mode: openshift
+
+# -- User prefix for namespace scoping and agent IDs
+prefix: red
+
+# -- Cluster domain (auto-detected on OpenShift, required for routes)
+# Example: apps.cluster-xyz.sandbox.opentlc.com
+clusterDomain: ""
+
+# -- Gateway image
+image:
+  repository: quay.io/sallyom/openclaw
+  tag: latest
+  pullPolicy: Always
+
+# -- OAuth proxy image (OpenShift only, must match cluster version)
+oauthProxyImage: "quay.io/openshift/origin-oauth-proxy:4.18"
+
+# -- Init container image (ubi9-minimal on OpenShift, busybox on K8s)
+# Leave empty to auto-select based on mode
+initImage: ""
+
+# -- Default agent configuration
+agent:
+  # -- Agent name suffix (used in ID: <prefix>_<name>)
+  name: shadowman
+  # -- Agent display name
+  displayName: Shadowman
+
+# -- Model configuration
+model:
+  # -- OpenAI-compatible model endpoint URL
+  endpoint: "http://vllm.openclaw-llms.svc.cluster.local/v1"
+  # -- API protocol: "openai-responses" or "openai-completions"
+  api: "openai-responses"
+  # -- API key for the model endpoint (if required)
+  apiKey: ""
+  # -- Local model identity (must match what the endpoint serves)
+  id: "openai/gpt-oss-20b"
+  name: "GPT OSS 20B"
+  contextWindow: 32768
+  maxTokens: 8192
+  # -- Default model ID for agents (auto-derived if empty)
+  # Examples: "anthropic/claude-sonnet-4-6", "local/openai/gpt-oss-20b"
+  defaultAgentModel: ""
+
+# -- API keys and secrets
+secrets:
+  # -- Gateway authentication token (auto-generated if empty)
+  gatewayToken: ""
+  # -- Anthropic API key (optional)
+  anthropicApiKey: ""
+  # -- OAuth client secret (auto-generated if empty, OpenShift only)
+  oauthClientSecret: ""
+  # -- OAuth cookie secret (auto-generated if empty, OpenShift only)
+  oauthCookieSecret: ""
+
+# -- Google Vertex AI (optional)
+vertex:
+  enabled: false
+  # -- GCP project ID
+  project: ""
+  # -- GCP region
+  location: "us-central1"
+  # -- Vertex provider: "google" for Gemini, "anthropic" for Claude via Vertex
+  provider: "google"
+
+# -- Telegram bot integration (optional)
+telegram:
+  enabled: false
+  # -- Bot token from @BotFather
+  botToken: ""
+  # -- Allowed Telegram user IDs
+  allowFrom: []
+
+# -- Gateway settings
+gateway:
+  # -- Trusted proxy CIDRs (OpenShift default: 10.128.0.0/14, adjust for your cluster)
+  trustedProxies:
+    - "10.128.0.0/14"
+  # -- Disable device auth for control UI (required behind reverse proxy)
+  dangerouslyDisableDeviceAuth: true
+
+# -- Observability
+observability:
+  # -- OTEL exporter endpoint (empty = disable OTEL export)
+  otelEndpoint: ""
+  # -- MLflow tracking URI
+  mlflowUri: ""
+
+# -- A2A zero-trust communication (requires Kagenti platform)
+a2a:
+  enabled: false
+  # -- Agent card URL for external discovery (defaults to in-cluster service URL)
+  agentUrl: ""
+
+# -- Storage
+storage:
+  home:
+    size: 20Gi
+    # -- Storage class (empty = cluster default)
+    storageClass: ""
+  workspace:
+    size: 10Gi
+    storageClass: ""
+
+# -- Resource quotas for the namespace
+quota:
+  enabled: true
+  requests:
+    cpu: "4"
+    memory: "8Gi"
+  limits:
+    cpu: "8"
+    memory: "16Gi"
+  pods: "20"
+  services: "10"
+  configmaps: "30"
+  secrets: "30"
+  pvcs: "10"
+  storage: "100Gi"
+
+# -- Pod disruption budget
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+# -- Gateway container resources
+resources:
+  gateway:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  oauthProxy:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m
+  agentCard:
+    requests:
+      memory: 32Mi
+      cpu: 10m
+    limits:
+      memory: 64Mi
+      cpu: 50m
+  initConfig:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m

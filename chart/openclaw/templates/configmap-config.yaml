@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-config
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+data:
+  openclaw.json: |
+    {
+      "plugins": {
+        "allow": ["diagnostics-otel", "memory-core"],
+        "entries": {
+          "diagnostics-otel": {"enabled": true},
+          "memory-core": {"enabled": true}
+        }
+      },
+      "gateway": {
+        "mode": "local",
+        "bind": "loopback",
+        "port": 18789,
+        "trustedProxies": {{ .Values.gateway.trustedProxies | toJson }},
+        "auth": {"mode": "token", "allowTailscale": false},
+        "controlUi": {
+          "enabled": true,
+          "dangerouslyDisableDeviceAuth": {{ .Values.gateway.dangerouslyDisableDeviceAuth }},
+          "allowedOrigins": {{ include "openclaw.allowedOrigins" . }}
+        },
+        "http": {"endpoints": {"chatCompletions": {"enabled": true}}}
+      },
+      "diagnostics": {
+        "enabled": true,
+        "otel": {
+          {{- if .Values.observability.otelEndpoint }}
+          "enabled": true,
+          "endpoint": {{ .Values.observability.otelEndpoint | quote }},
+          {{- else }}
+          "enabled": false,
+          "endpoint": "http://localhost:4318",
+          {{- end }}
+          "traces": true,
+          "metrics": true,
+          "logs": false
+        }
+      },
+      "models": {
+        "providers": {
+          "local": {
+            "baseUrl": {{ .Values.model.endpoint | quote }},
+            "api": {{ .Values.model.api | quote }},
+            "apiKey": {{ (.Values.model.apiKey | default "fakekey") | quote }},
+            "auth": "token",
+            "models": [
+              {
+                "id": {{ .Values.model.id | quote }},
+                "name": {{ .Values.model.name | quote }},
+                "api": {{ .Values.model.api | quote }},
+                "reasoning": false,
+                "input": ["text"],
+                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                "contextWindow": {{ .Values.model.contextWindow }},
+                "maxTokens": {{ .Values.model.maxTokens }}
+              }
+            ]
+          },
+          "anthropic": {
+            "baseUrl": "https://api.anthropic.com",
+            "api": "anthropic-messages",
+            "models": []
+          }
+          {{- if .Values.vertex.enabled }},
+          "anthropic-vertex": {
+            "baseUrl": "https://{{ .Values.vertex.location }}-aiplatform.googleapis.com",
+            "api": "anthropic-messages",
+            "models": [
+              {
+                "id": "claude-sonnet-4-6",
+                "name": "Claude Sonnet 4.6 (Vertex)",
+                "reasoning": true,
+                "input": ["text", "image"],
+                "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75},
+                "contextWindow": 200000,
+                "maxTokens": 16384
+              }
+            ]
+          }
+          {{- end }}
+        }
+      },
+      "tools": {
+        "exec": {
+          "security": "allowlist",
+          "safeBins": ["cat", "curl", "jq"],
+          "safeBinProfiles": {
+            "cat": {},
+            "curl": {"deniedFlags": ["-o", "--output", "-O", "--remote-name", "--upload-file", "-T"]},
+            "jq": {"maxPositional": 1, "allowedValueFlags": ["--arg", "--argjson", "--argstr"], "deniedFlags": ["--argfile", "--rawfile", "--slurpfile", "--from-file", "--library-path", "-L", "-f"]}
+          },
+          "timeoutSec": 30
+        },
+        "agentToAgent": {
+          "enabled": true,
+          "allow": ["*"]
+        }
+      },
+      "agents": {
+        "defaults": {
+          "workspace": "~/.openclaw/workspace",
+          "model": {"primary": {{ include "openclaw.defaultAgentModel" . | quote }}}
+        },
+        "list": [
+          {
+            "id": {{ include "openclaw.agentId" . | quote }},
+            "name": {{ .Values.agent.displayName | quote }},
+            "workspace": "/home/node/.openclaw/workspace-{{ include "openclaw.agentId" . }}",
+            "model": {"primary": {{ include "openclaw.defaultAgentModel" . | quote }}},
+            "subagents": {"allowAgents": ["*"]}
+          }
+        ]
+      },
+      "skills": {
+        "load": {
+          "extraDirs": ["~/.openclaw/skills"],
+          "watch": true,
+          "watchDebounceMs": 1000
+        }
+      },
+      {{- if .Values.telegram.enabled }}
+      "channels": {
+        "telegram": {
+          "dmPolicy": "allowlist",
+          "allowFrom": {{ toJson .Values.telegram.allowFrom }}
+        }
+      },
+      {{- end }}
+      "session": {
+        "store": "~/.openclaw/agents/{agentId}/sessions/sessions.json"
+      },
+      "cron": {"enabled": true}
+    }

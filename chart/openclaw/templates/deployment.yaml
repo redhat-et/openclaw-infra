@@ -1,0 +1,329 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+    {{- if .Values.a2a.enabled }}
+    kagenti.io/type: agent
+    kagenti.io/protocol: a2a
+    {{- end }}
+    kagenti.io/framework: "OpenClaw"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "openclaw.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.selectorLabels" . | nindent 8 }}
+        {{- if .Values.a2a.enabled }}
+        kagenti.io/type: agent
+        kagenti.io/protocol: a2a
+        kagenti.io/inject: enabled
+        {{- end }}
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '18789'
+        sidecar.opentelemetry.io/inject: "openclaw-sidecar"
+        kagenti.io/description: "OpenClaw AI Agent Gateway"
+        kagenti.io/outbound-ports-exclude: "443,4317,4318,18789"
+        kagenti.io/inbound-ports-exclude: "8080,8443,18789,18790"
+    spec:
+      {{- if eq .Values.mode "openshift" }}
+      serviceAccountName: openclaw-oauth-proxy
+      {{- end }}
+      {{- if eq .Values.mode "kubernetes" }}
+      securityContext:
+        fsGroup: 1000
+      {{- end }}
+      initContainers:
+        - name: init-config
+          image: {{ include "openclaw.initImage" . }}
+          imagePullPolicy: IfNotPresent
+          {{- if eq .Values.mode "kubernetes" }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources.initConfig | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
+              chmod 644 /home/node/.openclaw/openclaw.json
+              mkdir -p /home/node/.openclaw/workspace
+              mkdir -p /home/node/.openclaw/skills
+              mkdir -p /home/node/.openclaw/cron
+              mkdir -p /home/node/.openclaw/agents
+              mkdir -p /home/node/.openclaw/agents/shadowman/sessions
+              mkdir -p /home/node/.openclaw/agents/shadowman/agent
+              grep -o '"id": *"[^"]*"' /config/openclaw.json | sed 's/"id": *"//;s/"$//' | while read agent_id; do
+                mkdir -p "/home/node/.openclaw/agents/$agent_id/sessions"
+              done
+              if [ ! -f /home/node/.openclaw/workspace/AGENTS.md ]; then
+                cp /agents/shadowman/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md 2>/dev/null || echo "Warning: shadowman AGENTS.md not found"
+                cp /agents/shadowman/agent.json /home/node/.openclaw/workspace/agent.json 2>/dev/null || echo "Warning: shadowman agent.json not found"
+              fi
+              chgrp -R 0 /home/node/.openclaw
+              chmod -R g=u /home/node/.openclaw
+              echo "Config initialized with default agent"
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /home/node/.openclaw
+            - name: openclaw-workspace
+              mountPath: /home/node/.openclaw/workspace
+            - name: config-template
+              mountPath: /config
+            - name: shadowman-agent
+              mountPath: /agents/shadowman
+      containers:
+        {{- if eq .Values.mode "openshift" }}
+        - name: oauth-proxy
+          image: {{ .Values.oauthProxyImage }}
+          args:
+            - --http-address=:8443
+            - --https-address=
+            - --provider=openshift
+            - --upstream=http://localhost:18789
+            - --client-id={{ .Release.Namespace }}
+            - --client-secret-file=/etc/oauth/config/client-secret
+            - --cookie-secret-file=/etc/oauth/config/cookie_secret
+            - --cookie-expire=23h0m0s
+            - --pass-access-token
+            - --scope=user:full
+            - '--openshift-delegate-urls={"/":{"resource":"projects","verb":"list"}}'
+            - --skip-auth-regex=^/(metrics|api)
+          ports:
+            - containerPort: 8443
+              name: oauth-ui
+          volumeMounts:
+            - name: oauth-config
+              mountPath: /etc/oauth/config
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+          livenessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: oauth-ui
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /oauth/healthz
+              port: oauth-ui
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.oauthProxy | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+        {{- end }}
+        - name: gateway
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - /app/dist/index.js
+            - gateway
+            - run
+            - --bind
+            - loopback
+            - --port
+            - '18789'
+            - --verbose
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+            - name: bridge
+              containerPort: 18790
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /home/node
+            - name: OPENCLAW_CONFIG_DIR
+              value: /home/node/.openclaw
+            - name: OPENCLAW_STATE_DIR
+              value: /home/node/.openclaw
+            - name: OPENCLAW_CLI_PATH
+              value: /opt/app-root/src/openclaw.mjs
+            - name: TERM
+              value: xterm-256color
+            - name: NODE_ENV
+              value: production
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OPENCLAW_GATEWAY_TOKEN
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+                  optional: true
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: telegram-secrets
+                  key: bot-token
+                  optional: true
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /vertex/ambient-code-key.json
+            - name: GCE_METADATA_HOST
+              value: disabled
+            - name: GOOGLE_CLOUD_PROJECT
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: GOOGLE_CLOUD_PROJECT
+                  optional: true
+            - name: GOOGLE_CLOUD_LOCATION
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: GOOGLE_CLOUD_LOCATION
+                  optional: true
+            - name: OTEL_SERVICE_NAME
+              value: openclaw
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: K8S_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+          resources:
+            {{- toYaml .Values.resources.gateway | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["node", "-e", "require('http').get('http://127.0.0.1:18789/', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["node", "-e", "require('http').get('http://127.0.0.1:18789/', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: openclaw-home
+              mountPath: /home/node/.openclaw
+            - name: openclaw-workspace
+              mountPath: /home/node/.openclaw/workspace
+            - name: tmp-volume
+              mountPath: /tmp
+            - name: vertex-credentials
+              mountPath: /vertex
+              readOnly: true
+            - name: resource-report
+              mountPath: /data/reports/resource-optimizer
+              readOnly: true
+            - name: mlops-report
+              mountPath: /data/reports/mlops-monitor
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+        {{- if .Values.a2a.enabled }}
+        - name: agent-card
+          image: registry.access.redhat.com/ubi9:latest
+          command: ["python3", "-u", "/scripts/a2a-bridge.py"]
+          ports:
+            - name: a2a
+              containerPort: 8080
+          env:
+            - name: GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openclaw-secrets
+                  key: OPENCLAW_GATEWAY_TOKEN
+            - name: GATEWAY_URL
+              value: "http://localhost:18789"
+            - name: AGENT_ID
+              value: ""
+          volumeMounts:
+            - name: agent-card-data
+              mountPath: /srv/.well-known
+            - name: a2a-bridge-script
+              mountPath: /scripts
+          resources:
+            {{- toYaml .Values.resources.agentCard | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+        {{- end }}
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
+        {{- if eq .Values.mode "openshift" }}
+        - name: oauth-config
+          secret:
+            secretName: openclaw-oauth-config
+        - name: proxy-tls
+          secret:
+            secretName: openclaw-proxy-tls
+        {{- end }}
+        - name: openclaw-home
+          persistentVolumeClaim:
+            claimName: openclaw-home-pvc
+        - name: openclaw-workspace
+          persistentVolumeClaim:
+            claimName: openclaw-workspace-pvc
+        - name: config-template
+          configMap:
+            name: openclaw-config
+        - name: vertex-credentials
+          secret:
+            secretName: ambient-vertex
+            optional: true
+        - name: shadowman-agent
+          configMap:
+            name: shadowman-agent
+            optional: true
+        - name: resource-report
+          configMap:
+            name: resource-report-latest
+            optional: true
+        - name: mlops-report
+          configMap:
+            name: mlops-report-latest
+            optional: true
+        {{- if .Values.a2a.enabled }}
+        - name: agent-card-data
+          configMap:
+            name: openclaw-agent-card
+        - name: a2a-bridge-script
+          configMap:
+            name: a2a-bridge
+        {{- end }}

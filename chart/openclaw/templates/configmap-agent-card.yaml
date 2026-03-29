@@ -1,0 +1,13 @@
+{{- if .Values.a2a.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openclaw-agent-card
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+data:
+  agent.json: |
+    {{- include "openclaw.agentCardJson" . | nindent 4 }}
+  agent-card.json: |
+    {{- include "openclaw.agentCardJson" . | nindent 4 }}
+{{- end }}
