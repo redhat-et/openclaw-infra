@@ -14,8 +14,8 @@ OpenClaw agents need an LLM endpoint. You have several options:
 | Option | When to Use | Details |
 |--------|------------|---------|
 | **Anthropic API key** | You have an Anthropic API key and want to use Claude | Agents use `anthropic/claude-sonnet-4-6` |
-| **Anthropic via Vertex** | Your org has Claude enabled on GCP Vertex AI | Agents use `anthropic-vertex/claude-sonnet-4-6`, billed through GCP |
-| **Google Vertex AI** | Your org has a GCP project with Vertex AI enabled | Agents use `google-vertex/gemini-2.5-pro`, billed through GCP |
+| **Anthropic via Vertex** | Your org has Claude enabled on GCP Vertex AI | **Known limitation:** The OpenClaw gateway's `anthropic-messages` adapter calls `baseUrl + /v1/messages`, but Vertex AI uses a different path (`/v1/projects/.../locations/.../publishers/anthropic/models/...:predict`). This results in **404** when chatting. Until the gateway supports Vertex's path, use **option 1 (Anthropic API key)** for Claude, or **option 2 with provider "google"** for Gemini on Vertex. |
+| **Google Vertex AI** | Your org has a GCP project with Vertex AI enabled | Choose option 2 (Vertex) at setup, then pick provider **google**. Agents use `google-vertex/gemini-2.5-pro`, billed through GCP. |
 | **In-cluster vLLM** | Your cluster has a GPU node with vLLM deployed | Default `MODEL_ENDPOINT`: `http://vllm.openclaw-llms.svc.cluster.local/v1` |
 | **Your own endpoint** | You already have an OpenAI-compatible model server | Supply your server's `/v1` URL as `MODEL_ENDPOINT` |
 
@@ -33,7 +33,7 @@ The script prompts you for:
 
 1. **Namespace prefix** — use your name (e.g., `bob`). Creates `bob-openclaw`.
 2. **Agent name** — pick a name for your agent (e.g., `Shadowman`, `Lynx`, `Atlas`).
-3. **API keys** — Anthropic key (optional), model endpoint, Vertex AI (optional).
+3. **LLM source** — choose one: (1) Anthropic API key, (2) Google Vertex AI (Claude or Gemini), or (3) local/in-cluster model. You are then prompted only for the details of that choice (e.g. for Vertex: project ID, provider [anthropic is default], region, service account JSON path).
 
 After setup completes, your instance has:
 - A gateway with your named agent
@@ -46,7 +46,7 @@ After setup completes, your instance has:
 OpenClaw Gateway:  https://openclaw-<prefix>-openclaw.apps.YOUR-CLUSTER.com
 ```
 
-The UI uses OpenShift OAuth. The Control UI prompts for your **Gateway Token**:
+The UI uses OpenShift OAuth. In the Control UI, go to **Overview** and paste your **Gateway Token** into the Gateway token field:
 ```bash
 grep OPENCLAW_GATEWAY_TOKEN .env
 ```

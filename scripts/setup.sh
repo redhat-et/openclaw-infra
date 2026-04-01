@@ -294,70 +294,96 @@ else
   log_success "Secrets generated"
   echo ""
 
-  # Prompt for Anthropic API key (optional — for agents that use Anthropic models)
-  # Pick up from environment if already set
-  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-    log_success "Anthropic API key detected from environment"
-  else
-    log_info "Anthropic API key (optional, for agents using Claude models):"
-    read -sp "  API key (leave empty to skip): " ANTHROPIC_API_KEY
-    echo
-    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-    if [ -n "$ANTHROPIC_API_KEY" ]; then
-      log_success "Anthropic API key set"
-    else
-      log_info "Skipped — agents will use in-cluster model only"
-    fi
-  fi
+  # Choose one LLM source, then prompt only for that choice
+  log_info "How do you want to provide the LLM for agents?"
+  echo "  1) Anthropic API key (Claude via api.anthropic.com)"
+  echo "  2) Google Vertex AI (Claude or Gemini via GCP)"
+  echo "  3) Local / in-cluster model (OpenAI-compatible endpoint)"
+  read -p "  Choose [1/2/3]: " LLM_CHOICE
+  LLM_CHOICE=${LLM_CHOICE:-1}
   echo ""
 
-  # Prompt for model endpoint (OpenAI-compatible /v1 URL for in-cluster model)
-  log_info "Model endpoint (OpenAI-compatible /v1 URL for in-cluster model):"
-  log_info "  Default: http://vllm.openclaw-llms.svc.cluster.local/v1"
-  log_info "  Options: deploy vLLM (see agents/openclaw/llm/), use your own, or rely on Anthropic API"
-  read -p "  Enter endpoint (or press Enter for default): " MODEL_ENDPOINT
-  MODEL_ENDPOINT=${MODEL_ENDPOINT:-http://vllm.openclaw-llms.svc.cluster.local/v1}
-  log_success "Model endpoint: $MODEL_ENDPOINT"
-  echo ""
+  # Defaults for options we're not using (cleared per branch as needed)
+  VERTEX_ENABLED=false
+  VERTEX_PROVIDER=""
+  GOOGLE_CLOUD_PROJECT=""
+  GOOGLE_CLOUD_LOCATION=""
+  VERTEX_SA_JSON_PATH=""
+  MODEL_ENDPOINT="${MODEL_ENDPOINT:-http://vllm.openclaw-llms.svc.cluster.local/v1}"
 
-  # Prompt for Google Vertex AI (optional — for Gemini models via GCP)
-  log_info "Google Vertex AI (optional, for Gemini models billed through GCP):"
-  log_info "  Requires a GCP service account JSON key with Vertex AI permissions"
-  read -p "  Enable Google Vertex? (y/N): " -n 1 -r VERTEX_REPLY
-  echo
-  if [[ "$VERTEX_REPLY" =~ ^[Yy]$ ]]; then
-    read -p "  GCP project ID: " GOOGLE_CLOUD_PROJECT
-    if [ -z "$GOOGLE_CLOUD_PROJECT" ]; then
-      log_error "Project ID is required for Vertex AI"
+  case "$LLM_CHOICE" in
+    1)
+      # Anthropic API key (pick up from env if set)
+      if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        log_success "Anthropic API key detected from environment"
+      else
+        log_info "Anthropic API key (for Claude models):"
+        read -sp "  API key: " ANTHROPIC_API_KEY
+        echo
+        ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+        if [ -z "$ANTHROPIC_API_KEY" ]; then
+          log_error "API key is required for option 1 (or set ANTHROPIC_API_KEY before running)"
+          exit 1
+        fi
+        log_success "Anthropic API key set"
+      fi
+      ;;
+    2)
+      # Google Vertex AI (Claude or Gemini via GCP)
+      ANTHROPIC_API_KEY=""
+      VERTEX_ENABLED=true
+      GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}"
+      log_info "Google Vertex AI (Claude or Gemini billed through GCP):"
+      log_info "  Requires a GCP project and GCP credentials (service account key or user ADC)"
+      read -p "  GCP project ID [${GOOGLE_CLOUD_PROJECT:-}]: " GOOGLE_CLOUD_PROJECT_INPUT
+      GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT_INPUT:-$GOOGLE_CLOUD_PROJECT}"
+      if [ -z "$GOOGLE_CLOUD_PROJECT" ]; then
+        log_error "Project ID is required (or set ANTHROPIC_VERTEX_PROJECT_ID)"
+        exit 1
+      fi
+      read -p "  Vertex provider — 'google' for Gemini, 'anthropic' for Claude [google]: " VERTEX_PROVIDER
+      VERTEX_PROVIDER=${VERTEX_PROVIDER:-google}
+      if [ "$VERTEX_PROVIDER" = "anthropic" ]; then
+        REGION_DEFAULT="global"
+      else
+        REGION_DEFAULT="us-central1"
+      fi
+      read -p "  GCP region [$REGION_DEFAULT]: " GOOGLE_CLOUD_LOCATION
+      GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-$REGION_DEFAULT}
+      GCLOUD_DEFAULT_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+      VERTEX_JSON_DEFAULT="${VERTEX_SA_JSON_PATH:-${GOOGLE_APPLICATION_CREDENTIALS:-$GCLOUD_DEFAULT_CREDENTIALS}}"
+      if [ -n "$VERTEX_JSON_DEFAULT" ] && [ ! -f "$VERTEX_JSON_DEFAULT" ]; then
+        VERTEX_JSON_DEFAULT=""
+      fi
+      if [ -n "$VERTEX_JSON_DEFAULT" ]; then
+        read -p "  Path to GCP credentials JSON (SA key or user ADC) [${VERTEX_JSON_DEFAULT}]: " VERTEX_SA_JSON_PATH_INPUT
+      else
+        read -p "  Path to GCP credentials JSON (SA key or user ADC) [] (leave empty if secret already in cluster): " VERTEX_SA_JSON_PATH_INPUT
+      fi
+      VERTEX_SA_JSON_PATH="${VERTEX_SA_JSON_PATH_INPUT:-$VERTEX_JSON_DEFAULT}"
+      if [ -n "$VERTEX_SA_JSON_PATH" ] && [ ! -f "$VERTEX_SA_JSON_PATH" ]; then
+        log_error "File not found: $VERTEX_SA_JSON_PATH"
+        exit 1
+      fi
+      if [ -z "$VERTEX_SA_JSON_PATH" ]; then
+        log_info "No JSON key provided — assuming vertex secret already exists in cluster"
+      fi
+      log_success "Vertex AI enabled: project=$GOOGLE_CLOUD_PROJECT region=$GOOGLE_CLOUD_LOCATION provider=$VERTEX_PROVIDER"
+      ;;
+    3)
+      # Local / in-cluster model
+      ANTHROPIC_API_KEY=""
+      log_info "Local model endpoint (OpenAI-compatible /v1 URL):"
+      log_info "  e.g. http://vllm.openclaw-llms.svc.cluster.local/v1 (see agents/openclaw/llm/)"
+      read -p "  Enter endpoint [${MODEL_ENDPOINT}]: " MODEL_ENDPOINT_INPUT
+      MODEL_ENDPOINT="${MODEL_ENDPOINT_INPUT:-$MODEL_ENDPOINT}"
+      log_success "Model endpoint: $MODEL_ENDPOINT"
+      ;;
+    *)
+      log_error "Invalid choice. Use 1, 2, or 3."
       exit 1
-    fi
-    read -p "  Vertex provider — 'google' for Gemini, 'anthropic' for Claude [google]: " VERTEX_PROVIDER
-    VERTEX_PROVIDER=${VERTEX_PROVIDER:-google}
-    if [ "$VERTEX_PROVIDER" = "anthropic" ]; then
-      REGION_DEFAULT="global"
-    else
-      REGION_DEFAULT="us-central1"
-    fi
-    read -p "  GCP region [$REGION_DEFAULT]: " GOOGLE_CLOUD_LOCATION
-    GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-$REGION_DEFAULT}
-    read -p "  Path to service account JSON key (leave empty if secret already exists): " VERTEX_SA_JSON_PATH
-    if [ -n "$VERTEX_SA_JSON_PATH" ] && [ ! -f "$VERTEX_SA_JSON_PATH" ]; then
-      log_error "File not found: $VERTEX_SA_JSON_PATH"
-      exit 1
-    fi
-    VERTEX_ENABLED=true
-    if [ -z "$VERTEX_SA_JSON_PATH" ]; then
-      log_info "No JSON key provided — assuming vertex secret already exists in cluster"
-    fi
-    log_success "Vertex AI enabled: project=$GOOGLE_CLOUD_PROJECT region=$GOOGLE_CLOUD_LOCATION"
-  else
-    VERTEX_ENABLED=false
-    VERTEX_PROVIDER=""
-    GOOGLE_CLOUD_PROJECT=""
-    GOOGLE_CLOUD_LOCATION=""
-    VERTEX_SA_JSON_PATH=""
-    log_info "Skipped"
-  fi
+      ;;
+  esac
   echo ""
 
   # Prompt for Telegram bot token (optional)
@@ -504,7 +530,7 @@ else
 fi
 
 # Agent model priority: Anthropic API > Vertex (anthropic or google) > in-cluster
-# VERTEX_PROVIDER controls which Vertex provider: "anthropic" or "google" (default)
+# VERTEX_PROVIDER controls which Vertex provider: "google" (default) or "anthropic"
 export VERTEX_PROVIDER="${VERTEX_PROVIDER:-google}"
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   export DEFAULT_AGENT_MODEL="anthropic/claude-sonnet-4-6"
@@ -519,8 +545,15 @@ else
   log_info "No Anthropic API key or Vertex — agents will use in-cluster model (${MODEL_ENDPOINT})"
 fi
 
+# Vertex AI base URL: global endpoint has no region prefix (https://aiplatform.googleapis.com)
+if [ "${GOOGLE_CLOUD_LOCATION:-}" = "global" ]; then
+  export VERTEX_AI_BASE_URL="https://aiplatform.googleapis.com"
+else
+  export VERTEX_AI_BASE_URL="https://${GOOGLE_CLOUD_LOCATION:-us-central1}-aiplatform.googleapis.com"
+fi
+
 # Explicit variable list to protect {agentId} and other non-env placeholders
-ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION} ${TELEGRAM_ALLOW_FROM} ${MLFLOW_TRACKING_URI} ${MLFLOW_EXPERIMENT_ID} ${MLFLOW_TLS_INSECURE} ${OPENCLAW_IMAGE}'
+ENVSUBST_VARS='${CLUSTER_DOMAIN} ${OPENCLAW_PREFIX} ${OPENCLAW_NAMESPACE} ${OPENCLAW_GATEWAY_TOKEN} ${OPENCLAW_OAUTH_CLIENT_SECRET} ${OPENCLAW_OAUTH_COOKIE_SECRET} ${ANTHROPIC_API_KEY} ${SHADOWMAN_CUSTOM_NAME} ${SHADOWMAN_DISPLAY_NAME} ${MODEL_ENDPOINT} ${DEFAULT_AGENT_MODEL} ${GOOGLE_CLOUD_PROJECT} ${GOOGLE_CLOUD_LOCATION} ${VERTEX_AI_BASE_URL} ${TELEGRAM_ALLOW_FROM} ${MLFLOW_TRACKING_URI} ${MLFLOW_EXPERIMENT_ID} ${MLFLOW_TLS_INSECURE} ${OPENCLAW_IMAGE}'
 
 # Build generated/ directory: mirror source tree with templates processed
 GENERATED_DIR="$REPO_ROOT/generated"
